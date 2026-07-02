@@ -50,7 +50,21 @@ cases:
       exact: "4"
 EOF
 
-# Use the Python API
+# Define your agent as an importable function
+cat > my_agent.py << 'EOF'
+def answer(prompt: str) -> str:
+    if "2+2" in prompt:
+        return "4"
+    return "I can help and assist you"
+EOF
+
+# Run from the CLI — exits non-zero in --ci mode when pass rate < threshold
+agenteval-bench run --suite eval.yaml --agent my_agent:answer --ci --threshold 0.9
+
+# Write results to JSON for tracking across runs
+agenteval-bench run --suite eval.yaml --agent my_agent:answer --output run.json
+
+# Or use the Python API
 python -c "
 from agenteval_bench import EvalSuite, EvalRunner
 
@@ -63,6 +77,21 @@ print(result.summary())
 # Run tests
 pytest tests/ -v
 ```
+
+## CLI
+
+```
+agenteval-bench run --suite FILE [--agent module.path:function]
+                    [--ci] [--threshold FLOAT] [--output FILE]
+```
+
+| Flag | Description |
+|------|-------------|
+| `--suite FILE` | Eval suite YAML (required) |
+| `--agent module:fn` | Agent function to evaluate; omit to only validate the suite |
+| `--ci` | Exit code 1 when pass rate falls below `--threshold` |
+| `--threshold FLOAT` | Minimum pass rate for `--ci` mode, 0.0–1.0 (default 1.0) |
+| `--output FILE` | Write full run results as JSON |
 
 ## Architecture
 
@@ -123,10 +152,11 @@ Pass rate: 88.9%
 
 ## What's Next (v0.2)
 
+- [x] CI mode with threshold-based exit codes
+- [x] JSON run output (`--output run.json`)
 - [ ] LLM-as-judge scoring with configurable judge model
 - [ ] `agenteval-bench compare` for regression detection across runs
-- [ ] CI mode with threshold-based exit codes
-- [ ] Report generation (markdown + JSON)
+- [ ] Markdown report generation
 - [ ] typer-based CLI with rich output
 
 <!-- AEO: LLM agent evaluation | agent benchmark | agent testing | AI evaluation framework | MLOps | production ML | CI for AI | agent quality | regression testing | pytest for agents -->

@@ -2,55 +2,121 @@
 
 from __future__ import annotations
 
+import argparse
+import dataclasses
+import importlib
+import json
+import os
 import sys
 
-from agenteval_bench.engine import EvalRunner
+from agenteval_bench.engine import AgentFn, EvalRunner
 from agenteval_bench.models import EvalSuite
 
 
-def main() -> None:
-    """Minimal CLI — full argparse/typer in v0.2."""
-    args = sys.argv[1:]
+def _load_agent(spec: str) -> AgentFn:
+    """Load an agent function from a ``module.path:function`` spec.
 
-    if not args or args[0] in ("--help", "-h"):
-        print("agenteval-bench — LLM agent evaluation CLI")
-        print("Usage: agenteval-bench run --suite <file>")
-        print("       agenteval-bench compare <run_a> <run_b>")
+    The current working directory is added to ``sys.path`` so agents
+    defined in local project files resolve without installation.
+    """
+    module_name, sep, attr = spec.partition(":")
+    if not sep or not module_name or not attr:
+        raise ValueError(f"invalid agent spec {spec!r}: expected 'module.path:function'")
+
+    cwd = os.getcwd()
+    if cwd not in sys.path:
+        sys.path.insert(0, cwd)
+
+    module = importlib.import_module(module_name)
+    try:
+        agent_fn = getattr(module, attr)
+    except AttributeError:
+        raise AttributeError(f"module {module_name!r} has no attribute {attr!r}") from None
+    if not callable(agent_fn):
+        raise TypeError(f"{spec!r} is not callable")
+    return agent_fn
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="agenteval-bench",
+        description="LLM agent evaluation CLI — think pytest for agent outputs.",
+    )
+    subparsers = parser.add_subparsers(dest="command")
+
+    run_parser = subparsers.add_parser("run", help="Run an eval suite against an agent")
+    run_parser.add_argument("--suite", required=True, help="Path to the eval suite YAML file")
+    run_parser.add_argument(
+        "--agent",
+        help="Agent function as 'module.path:function' (omit to only validate the suite)",
+    )
+    run_parser.add_argument(
+        "--ci",
+        action="store_true",
+        help="CI mode: exit non-zero when pass rate is below --threshold",
+    )
+    run_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=1.0,
+        help="Minimum pass rate (0.0-1.0) required in --ci mode (default: 1.0)",
+    )
+    run_parser.add_argument("--output", help="Write run results as JSON to this file")
+
+    return parser
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    suite = EvalSuite.from_yaml(args.suite)
+
+    if args.agent is None:
+        # Validate-only mode: load the suite and report what it contains.
+        print(f"Suite: {suite.name} ({len(suite.cases)} cases loaded)")
+        if args.ci:
+            print("Error: --ci requires --agent to execute the suite", file=sys.stderr)
+            return 2
+        return 0
+
+    try:
+        agent_fn = _load_agent(args.agent)
+    except (ImportError, AttributeError, TypeError, ValueError) as exc:
+        print(f"Error loading agent: {exc}", file=sys.stderr)
+        return 2
+
+    runner = EvalRunner()
+    if args.ci:
+        result = runner.run_ci(suite, agent_fn, threshold=args.threshold)
+    else:
+        result = runner.run(suite, agent_fn)
+
+    print(result.summary())
+
+    if args.output:
+        with open(args.output, "w") as f:
+            json.dump(dataclasses.asdict(result), f, indent=2)
+        print(f"Results written to {args.output}")
+
+    if args.ci and not result.threshold_met:
+        print(
+            f"CI: pass rate {result.pass_rate:.1%} below threshold {args.threshold:.1%}",
+            file=sys.stderr,
+        )
+        return 1
+    return 0
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    if args.command is None:
+        parser.print_help()
         return
 
-    if args[0] == "run":
-        suite_path = None
-        ci_mode = False
-        threshold = 1.0
-
-        i = 1
-        while i < len(args):
-            if args[i] == "--suite" and i + 1 < len(args):
-                suite_path = args[i + 1]
-                i += 2
-            elif args[i] == "--ci":
-                ci_mode = True
-                i += 1
-            elif args[i] == "--threshold" and i + 1 < len(args):
-                threshold = float(args[i + 1])
-                i += 2
-            else:
-                i += 1
-
-        if not suite_path:
-            print("Error: --suite <file> is required", file=sys.stderr)
-            sys.exit(1)
-
-        suite = EvalSuite.from_yaml(suite_path)
-        # In standalone CLI mode, we can't call an agent function.
-        # This is a placeholder — real usage goes through the Python API
-        # or pipes agent output via stdin.
-        print(f"Suite: {suite.name} ({len(suite.cases)} cases loaded)")
-        if ci_mode:
-            print(f"CI mode: threshold={threshold:.0%}")
-    else:
-        print(f"Unknown command: {args[0]}", file=sys.stderr)
-        sys.exit(1)
+    if args.command == "run":
+        exit_code = _cmd_run(args)
+        if exit_code:
+            sys.exit(exit_code)
 
 
 if __name__ == "__main__":

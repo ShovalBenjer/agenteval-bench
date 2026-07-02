@@ -126,6 +126,11 @@ class RunResult:
     failed: int = 0
     skipped: int = 0
     pass_rate: float = 0.0
+    threshold_met: bool | None = None  # set by EvalRunner.run_ci
+
+    def meets_threshold(self, threshold: float) -> bool:
+        """Whether the pass rate satisfies the given threshold."""
+        return self.pass_rate >= threshold
 
     def summary(self) -> str:
         """Return a human-readable summary."""

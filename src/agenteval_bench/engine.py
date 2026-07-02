@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from agenteval_bench.models import EvalCase, EvalResult, EvalSuite, RunResult
+from agenteval_bench.models import EvalResult, EvalSuite, RunResult
 from agenteval_bench.scoring import DeterministicScorer
 
 
@@ -50,6 +50,13 @@ class EvalRunner:
         )
 
     def run_ci(self, suite: EvalSuite, agent_fn: AgentFn, threshold: float = 1.0) -> RunResult:
-        """Run in CI mode — returns result with pass_rate for threshold check."""
+        """Run in CI mode — sets `threshold_met` so callers can gate on it.
+
+        A run meets the threshold when its pass rate is at least `threshold`
+        (a fraction between 0.0 and 1.0, default 1.0 = all cases must pass).
+        """
+        if not 0.0 <= threshold <= 1.0:
+            raise ValueError(f"threshold must be between 0.0 and 1.0, got {threshold}")
         result = self.run(suite, agent_fn)
+        result.threshold_met = result.meets_threshold(threshold)
         return result

@@ -6,7 +6,7 @@ import json
 import re
 from typing import Any
 
-from agenteval_bench.models import EvalCase, EvalResult, ExpectedOutput
+from agenteval_bench.models import EvalCase, EvalResult
 
 
 class DeterministicScorer:
