@@ -9,6 +9,7 @@ import json
 import os
 import sys
 
+from agenteval_bench.compare import DEFAULT_REGRESSION_THRESHOLD, compare_runs, load_run
 from agenteval_bench.engine import AgentFn, EvalRunner
 from agenteval_bench.models import EvalSuite
 
@@ -63,6 +64,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_parser.add_argument("--output", help="Write run results as JSON to this file")
 
+    compare_parser = subparsers.add_parser(
+        "compare", help="Compare two runs and flag regressions"
+    )
+    compare_parser.add_argument("baseline", help="Baseline run JSON (from `run --output`)")
+    compare_parser.add_argument("candidate", help="Candidate run JSON (from `run --output`)")
+    compare_parser.add_argument(
+        "--threshold",
+        type=float,
+        default=DEFAULT_REGRESSION_THRESHOLD,
+        help="Max allowed pass-rate drop before flagging a regression (default: 0.05)",
+    )
+
     return parser
 
 
@@ -105,6 +118,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_compare(args: argparse.Namespace) -> int:
+    try:
+        baseline = load_run(args.baseline)
+        candidate = load_run(args.candidate)
+    except (OSError, ValueError, KeyError, json.JSONDecodeError) as exc:
+        print(f"Error loading run: {exc}", file=sys.stderr)
+        return 2
+
+    comparison = compare_runs(baseline, candidate, threshold=args.threshold)
+    print(comparison.summary())
+    return 1 if comparison.is_regression else 0
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -115,8 +141,12 @@ def main(argv: list[str] | None = None) -> None:
 
     if args.command == "run":
         exit_code = _cmd_run(args)
-        if exit_code:
-            sys.exit(exit_code)
+    elif args.command == "compare":
+        exit_code = _cmd_compare(args)
+    else:
+        exit_code = 0
+    if exit_code:
+        sys.exit(exit_code)
 
 
 if __name__ == "__main__":

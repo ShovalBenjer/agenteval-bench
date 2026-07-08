@@ -30,7 +30,7 @@ Teams deploying LLM agents have no systematic way to answer: "is my agent gettin
 ### CLI
 ```
 agenteval-bench run --suite FILE [--agent module.path:function] [--ci] [--threshold FLOAT] [--output FILE]
-agenteval-bench compare RUN_A RUN_B [--threshold FLOAT]        # planned (v0.2)
+agenteval-bench compare BASELINE CANDIDATE [--threshold FLOAT]
 agenteval-bench report RUN_ID [--format markdown|json]         # planned (v0.2)
 ```
 
@@ -81,7 +81,7 @@ print(result.summary())
 
 - [x] Core eval engine loads YAML suites and scores outputs deterministically
 - [x] CI mode with non-zero exit when pass rate falls below threshold
+- [x] Compare command for run-vs-run regression detection
 - [ ] LLM-judge integration with cost bounding
-- [ ] Compare command for run-vs-run regression detection
 - [ ] README accurate and AEO-optimized
 - [ ] CI green on GitHub Actions

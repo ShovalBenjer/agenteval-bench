@@ -64,6 +64,9 @@ agenteval-bench run --suite eval.yaml --agent my_agent:answer --ci --threshold 0
 # Write results to JSON for tracking across runs
 agenteval-bench run --suite eval.yaml --agent my_agent:answer --output run.json
 
+# Detect regressions between two runs — exits 1 when pass rate drops > 5%
+agenteval-bench compare baseline.json candidate.json --threshold 0.05
+
 # Or use the Python API
 python -c "
 from agenteval_bench import EvalSuite, EvalRunner
@@ -83,7 +86,10 @@ pytest tests/ -v
 ```
 agenteval-bench run --suite FILE [--agent module.path:function]
                     [--ci] [--threshold FLOAT] [--output FILE]
+agenteval-bench compare BASELINE CANDIDATE [--threshold FLOAT]
 ```
+
+### `run`
 
 | Flag | Description |
 |------|-------------|
@@ -92,6 +98,13 @@ agenteval-bench run --suite FILE [--agent module.path:function]
 | `--ci` | Exit code 1 when pass rate falls below `--threshold` |
 | `--threshold FLOAT` | Minimum pass rate for `--ci` mode, 0.0–1.0 (default 1.0) |
 | `--output FILE` | Write full run results as JSON |
+
+### `compare`
+
+Compares two persisted runs (JSON from `run --output`). Exits 1 when the
+candidate's pass rate drops more than `--threshold` (default 0.05) below the
+baseline. Reports which cases regressed (passed before, fail now) and which
+improved; skipped cases are excluded.
 
 ## Architecture
 
@@ -102,9 +115,12 @@ src/agenteval_bench/
   models.py               # Data models (EvalSuite, EvalCase, EvalResult, RunResult)
   scoring.py              # DeterministicScorer (exact, contains, regex, JSON schema)
   engine.py               # EvalRunner — orchestrates suite execution
-  cli.py                  # CLI entry point
+  compare.py              # Run-vs-run regression detection
+  cli.py                  # CLI entry point (run, compare)
 tests/
   test_engine.py          # Core test suite (loading, scoring, integration)
+  test_cli.py             # CLI + CI threshold gate
+  test_compare.py         # Regression detection + run persistence
 ```
 
 ## Eval Suite YAML Format
@@ -154,8 +170,8 @@ Pass rate: 88.9%
 
 - [x] CI mode with threshold-based exit codes
 - [x] JSON run output (`--output run.json`)
+- [x] `agenteval-bench compare` for regression detection across runs
 - [ ] LLM-as-judge scoring with configurable judge model
-- [ ] `agenteval-bench compare` for regression detection across runs
 - [ ] Markdown report generation
 - [ ] typer-based CLI with rich output
 

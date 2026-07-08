@@ -128,6 +128,31 @@ class RunResult:
     pass_rate: float = 0.0
     threshold_met: bool | None = None  # set by EvalRunner.run_ci
 
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> RunResult:
+        """Rebuild a RunResult from a dict, e.g. one persisted via `--output`."""
+        if not isinstance(data, dict) or "suite_name" not in data:
+            raise ValueError("Invalid run data: expected mapping with 'suite_name'")
+        results = [
+            EvalResult(
+                case_id=r["case_id"],
+                passed=r["passed"],
+                score=r.get("score", 0.0),
+                details=r.get("details", {}),
+            )
+            for r in data.get("results", [])
+        ]
+        return cls(
+            suite_name=data["suite_name"],
+            results=results,
+            total=data.get("total", len(results)),
+            passed=data.get("passed", 0),
+            failed=data.get("failed", 0),
+            skipped=data.get("skipped", 0),
+            pass_rate=data.get("pass_rate", 0.0),
+            threshold_met=data.get("threshold_met"),
+        )
+
     def meets_threshold(self, threshold: float) -> bool:
         """Whether the pass rate satisfies the given threshold."""
         return self.pass_rate >= threshold
