@@ -83,5 +83,5 @@ print(result.summary())
 - [x] CI mode with non-zero exit when pass rate falls below threshold
 - [x] Compare command for run-vs-run regression detection
 - [ ] LLM-judge integration with cost bounding
-- [ ] README accurate and AEO-optimized
-- [ ] CI green on GitHub Actions
+- [x] README accurate and AEO-optimized
+- [x] CI green on GitHub Actions
