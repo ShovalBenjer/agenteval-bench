@@ -42,12 +42,32 @@ def main() -> None:
             sys.exit(1)
 
         suite = EvalSuite.from_yaml(suite_path)
-        # In standalone CLI mode, we can't call an agent function.
-        # This is a placeholder — real usage goes through the Python API
-        # or pipes agent output via stdin.
-        print(f"Suite: {suite.name} ({len(suite.cases)} cases loaded)")
+        # Standalone CLI scores a replay suite: each case carries a recorded
+        # `output`. Cases without one are skipped (a live agent would fill them
+        # via the Python API). This is what CI runs against a golden set.
+        recorded = {c.id: c.output for c in suite.cases}
+        missing = [c.id for c in suite.cases if c.output is None and not c.skip]
+        for c in suite.cases:
+            if c.output is None and not c.skip:
+                c.skip = True
+
+        # run() calls agent_fn only for non-skipped cases, in case order.
+        replay_ids = iter([c.id for c in suite.cases if not c.skip])
+
+        def replay_fn(_input: str) -> str:
+            return recorded.get(next(replay_ids)) or ""
+
+        runner = EvalRunner()
+        result = runner.run(suite, replay_fn)
+        print(result.summary())
+        if missing:
+            print(f"Note: {len(missing)} case(s) had no recorded output and were skipped.")
+
         if ci_mode:
-            print(f"CI mode: threshold={threshold:.0%}")
+            ok = result.pass_rate >= threshold
+            print(f"CI gate: pass_rate {result.pass_rate:.1%} vs threshold {threshold:.0%} -> {'PASS' if ok else 'FAIL'}")
+            if not ok:
+                sys.exit(2)
     else:
         print(f"Unknown command: {args[0]}", file=sys.stderr)
         sys.exit(1)

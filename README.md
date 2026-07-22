@@ -110,22 +110,31 @@ cases:
 | `contains` | All needles present in output | Yes |
 | `regex` | Regex pattern found in output | Yes |
 | `json_schema` | Valid JSON with required keys | Yes |
-| LLM-as-judge | Model grades output against rubric | No (v0.2) |
+| LLM-as-judge | Model grades output against rubric | No (planned) |
 
-## Screenshots
+## CI gating
 
-<!-- Placeholders -->
+Run a golden replay suite (each case carries a recorded `output`) and fail the
+build when the pass rate drops below a threshold. This runs in this repo's own
+CI on every push.
+
+```bash
+agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9
 ```
-Suite: my-agent-eval
-Total: 10 | Passed: 8 | Failed: 1 | Skipped: 1
-Pass rate: 88.9%
+
+```
+Suite: support-agent-golden
+Total: 4 | Passed: 4 | Failed: 0 | Skipped: 0
+Pass rate: 100.0%
+CI gate: pass_rate 100.0% vs threshold 90% -> PASS
 ```
 
-## What's Next (v0.2)
+Exit codes: `0` clean or gate passed, `1` bad input, `2` gate failed.
 
-- [ ] LLM-as-judge scoring with configurable judge model
-- [ ] `agenteval-bench compare` for regression detection across runs
-- [ ] CI mode with threshold-based exit codes
+## What's Next
+
+- [ ] LLM-as-judge scoring with a configurable judge model
+- [ ] `agenteval-bench compare` for run-over-run regression diffs
 - [ ] Report generation (markdown + JSON)
 - [ ] typer-based CLI with rich output
 

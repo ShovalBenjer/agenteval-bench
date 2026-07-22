@@ -42,6 +42,8 @@ class EvalCase:
     expected: ExpectedOutput = field(default_factory=ExpectedOutput)
     rubric: list[RubricCriterion] = field(default_factory=list)
     skip: bool = False
+    # Recorded agent output, for replay suites scored in CI without a live agent.
+    output: str | None = None
 
 
 @dataclass
@@ -88,6 +90,7 @@ class EvalSuite:
                     expected=expected,
                     rubric=rubric,
                     skip=case_data.get("skip", False),
+                    output=case_data.get("output"),
                 )
             )
 

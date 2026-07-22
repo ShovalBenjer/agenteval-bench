@@ -21,3 +21,5 @@ jobs:
         run: ruff check src/ tests/
       - name: Test
         run: pytest tests/ -v --tb=short
+      - name: Eval gate (golden replay suite)
+        run: agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9

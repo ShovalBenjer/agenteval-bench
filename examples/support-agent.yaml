@@ -1,0 +1,33 @@
+name: support-agent-golden
+version: 1
+cost_bound:
+  max_input_tokens: 1500
+  max_output_tokens: 120
+# Replay suite: each case carries a recorded agent `output`, scored
+# deterministically in CI. Run:
+#   agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9
+cases:
+  - id: refund-window
+    input: "How long do I have to request a refund?"
+    output: "You can request a refund within 14 days of purchase."
+    expected:
+      contains: ["14 days", "refund"]
+
+  - id: reset-password
+    input: "I forgot my password, what do I do?"
+    output: "Open Settings, choose Security, then Reset password to get a reset link by email."
+    expected:
+      contains: ["Reset password", "email"]
+
+  - id: order-status-json
+    input: "Return the status of order 5512 as JSON."
+    output: '{"order_id": 5512, "status": "shipped"}'
+    expected:
+      json_schema:
+        required: ["order_id", "status"]
+
+  - id: business-hours
+    input: "When is support open?"
+    output: "Support is open Sunday to Thursday, 9:00 to 18:00 Israel time."
+    expected:
+      regex: "9:00.*18:00"
