@@ -1,11 +1,12 @@
 """Tests for the core eval engine — RED then GREEN."""
 
 import os
-import pytest
 import tempfile
 
-from agenteval_bench.engine import EvalRunner
+import pytest
+
 from agenteval_bench.models import EvalSuite
+from agenteval_bench.engine import EvalRunner
 from agenteval_bench.scoring import DeterministicScorer
 
 
