@@ -49,7 +49,7 @@ cases:
     def test_rejects_invalid_yaml(self):
         path = _write_yaml("just a string, not a mapping")
         try:
-            with pytest.raises(ValueError, match="expected mapping"):
+            with pytest.raises(TypeError, match="expected mapping"):
                 EvalSuite.from_yaml(path)
         finally:
             os.unlink(path)
