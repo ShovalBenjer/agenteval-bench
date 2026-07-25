@@ -1,7 +1,6 @@
 """CLI CI-gate tests: a replay suite must exit non-zero below threshold."""
 
-import os
-import tempfile
+import os, tempfile
 
 from agenteval_bench import cli
 
