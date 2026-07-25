@@ -2,9 +2,7 @@
 
 import os
 import tempfile
-
 import pytest
-
 from agenteval_bench.engine import EvalRunner
 from agenteval_bench.models import EvalSuite
 from agenteval_bench.scoring import DeterministicScorer

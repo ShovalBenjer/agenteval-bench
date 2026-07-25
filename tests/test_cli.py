@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-
 from agenteval_bench import cli
 
 

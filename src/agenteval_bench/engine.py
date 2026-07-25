@@ -1,9 +1,7 @@
 """Core eval runner — orchestrates suite execution."""
 
 from __future__ import annotations
-
 from collections.abc import Callable
-
 from agenteval_bench.models import EvalResult, EvalSuite, RunResult
 from agenteval_bench.scoring import DeterministicScorer
 
