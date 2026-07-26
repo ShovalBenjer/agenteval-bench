@@ -64,7 +64,7 @@ class EvalSuite:
             data = yaml.safe_load(f)
 
         if not isinstance(data, dict):
-            raise ValueError(f"Invalid eval suite: expected mapping, got {type(data).__name__}")
+            raise TypeError(f"Invalid eval suite: expected mapping, got {type(data).__name__}")
 
         cases = []
         for case_data in data.get("cases", []):
