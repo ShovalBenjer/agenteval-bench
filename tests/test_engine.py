@@ -8,8 +8,6 @@ import pytest
 from agenteval_bench.engine import EvalRunner
 from agenteval_bench.models import EvalSuite
 from agenteval_bench.scoring import DeterministicScorer
-
-
 # --- Helpers ---
 
 def _write_yaml(content: str) -> str:
