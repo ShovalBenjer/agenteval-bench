@@ -5,9 +5,10 @@ import tempfile
 
 import pytest
 
-from agenteval_bench.engine import EvalRunner
 from agenteval_bench.models import EvalSuite
+from agenteval_bench.engine import EvalRunner
 from agenteval_bench.scoring import DeterministicScorer
+
 
 # --- Helpers ---
 
@@ -49,7 +50,7 @@ cases:
     def test_rejects_invalid_yaml(self):
         path = _write_yaml("just a string, not a mapping")
         try:
-            with pytest.raises(ValueError, match="expected mapping"):
+            with pytest.raises(TypeError, match="expected mapping"):
                 EvalSuite.from_yaml(path)
         finally:
             os.unlink(path)
