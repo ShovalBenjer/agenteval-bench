@@ -2,7 +2,6 @@
 
 import os
 import tempfile
-
 import pytest
 
 from agenteval_bench.models import EvalSuite
