@@ -65,9 +65,9 @@ class DeterministicScorer:
         if total_weight == 0:
             weighted_score = 0.0
         else:
-            weighted_score = sum(
-                weights[name] for name, passed in checks.items() if passed
-            ) / total_weight
+            weighted_score = (
+                sum(weights[name] for name, passed in checks.items() if passed) / total_weight
+            )
 
         return EvalResult(
             case_id=case.id,

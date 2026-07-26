@@ -65,7 +65,9 @@ def main() -> None:
 
         if ci_mode:
             ok = result.pass_rate >= threshold
-            print(f"CI gate: pass_rate {result.pass_rate:.1%} vs threshold {threshold:.0%} -> {'PASS' if ok else 'FAIL'}")
+            print(
+                f"CI gate: pass_rate {result.pass_rate:.1%} vs threshold {threshold:.0%} -> {'PASS' if ok else 'FAIL'}"
+            )
             if not ok:
                 sys.exit(2)
     else:
