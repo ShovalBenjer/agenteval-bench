@@ -29,6 +29,7 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           track_progress: true
+          allowed_bots: kilo-code-bot
           prompt: |
             Perform a fresh, full review of this PR (do not assume prior reviews).
             Focus, in order: (1) correctness bugs that break behavior, (2) security
