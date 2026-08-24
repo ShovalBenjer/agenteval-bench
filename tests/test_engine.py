@@ -46,6 +46,7 @@ cases:
 class TestDeterministicScorer:
     def test_exact_match_passes(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t1", input="q", expected=ExpectedOutput(exact="yes"))
         scorer = DeterministicScorer()
         result = scorer.score(case, "yes")
@@ -54,6 +55,7 @@ class TestDeterministicScorer:
 
     def test_exact_match_fails(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t2", input="q", expected=ExpectedOutput(exact="yes"))
         scorer = DeterministicScorer()
         result = scorer.score(case, "no")
@@ -62,6 +64,7 @@ class TestDeterministicScorer:
 
     def test_contains_all_passes(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t3", input="q", expected=ExpectedOutput(contains=["hello", "world"]))
         scorer = DeterministicScorer()
         result = scorer.score(case, "hello beautiful world")
@@ -69,6 +72,7 @@ class TestDeterministicScorer:
 
     def test_contains_partial_fails(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t4", input="q", expected=ExpectedOutput(contains=["hello", "world"]))
         scorer = DeterministicScorer()
         result = scorer.score(case, "hello only")
@@ -76,6 +80,7 @@ class TestDeterministicScorer:
 
     def test_regex_match_passes(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t5", input="q", expected=ExpectedOutput(regex=r"\d{4}-\d{2}-\d{2}"))
         scorer = DeterministicScorer()
         result = scorer.score(case, "today is 2026-05-27")
@@ -83,6 +88,7 @@ class TestDeterministicScorer:
 
     def test_no_expected_returns_failure(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t6", input="q", expected=ExpectedOutput())
         scorer = DeterministicScorer()
         result = scorer.score(case, "anything")
@@ -91,6 +97,7 @@ class TestDeterministicScorer:
 
     def test_json_schema_passes(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         schema = {"required": ["name", "age"]}
         case = EvalCase(id="t7", input="q", expected=ExpectedOutput(json_schema=schema))
         scorer = DeterministicScorer()
@@ -99,6 +106,7 @@ class TestDeterministicScorer:
 
     def test_json_schema_fails_missing_key(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         schema = {"required": ["name", "age"]}
         case = EvalCase(id="t8", input="q", expected=ExpectedOutput(json_schema=schema))
         scorer = DeterministicScorer()
@@ -180,6 +188,7 @@ cases:
 
     def test_summary_format(self):
         from agenteval_bench.models import RunResult
+
         r = RunResult(suite_name="test", total=10, passed=8, failed=1, skipped=1, pass_rate=0.889)
         summary = r.summary()
         assert "test" in summary
