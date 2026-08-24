@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import sys
 
+import yaml
+
 from agenteval_bench.engine import EvalRunner
 from agenteval_bench.models import EvalSuite
 
@@ -16,6 +18,7 @@ def main() -> None:
         print("agenteval-bench — LLM agent evaluation CLI")
         print("Usage: agenteval-bench run --suite <file>")
         print("       agenteval-bench compare <run_a> <run_b>")
+        print("       agenteval-bench report")
         return
 
     if args[0] == "run":
@@ -41,7 +44,18 @@ def main() -> None:
             print("Error: --suite <file> is required", file=sys.stderr)
             sys.exit(1)
 
-        suite = EvalSuite.from_yaml(suite_path)
+        try:
+            suite = EvalSuite.from_yaml(suite_path)
+        except FileNotFoundError:
+            print(f"Error: suite file not found: {suite_path}", file=sys.stderr)
+            sys.exit(1)
+        except yaml.YAMLError as exc:
+            print(f"Error: malformed YAML in {suite_path}: {exc}", file=sys.stderr)
+            sys.exit(1)
+        except PermissionError:
+            print(f"Error: permission denied reading {suite_path}", file=sys.stderr)
+            sys.exit(1)
+
         # Standalone CLI scores a replay suite: each case carries a recorded
         # `output`. Cases without one are skipped (a live agent would fill them
         # via the Python API). This is what CI runs against a golden set.
@@ -69,6 +83,10 @@ def main() -> None:
             print(f"CI gate: {result.pass_rate:.1%} vs threshold {threshold:.0%} -> {status}")
             if not ok:
                 sys.exit(2)
+    elif args[0] == "compare":
+        print("compare: not yet implemented (stub)")
+    elif args[0] == "report":
+        print("report: not yet implemented (stub)")
     else:
         print(f"Unknown command: {args[0]}", file=sys.stderr)
         sys.exit(1)

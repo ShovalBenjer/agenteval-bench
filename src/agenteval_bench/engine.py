@@ -27,7 +27,14 @@ class EvalRunner:
                 )
                 continue
 
-            agent_output = agent_fn(case.input)
+            try:
+                agent_output = agent_fn(case.input)
+            except Exception as exc:
+                results.append(
+                    EvalResult(case_id=case.id, passed=False, score=0.0, details={"error": str(exc)})
+                )
+                continue
+
             result = self.scorer.score(case, agent_output)
             results.append(result)
 
@@ -49,6 +56,10 @@ class EvalRunner:
         )
 
     def run_ci(self, suite: EvalSuite, agent_fn: AgentFn, threshold: float = 1.0) -> RunResult:
-        """Run in CI mode — returns result with pass_rate for threshold check."""
+        """Run in CI mode — raises RuntimeError when pass_rate is below threshold."""
         result = self.run(suite, agent_fn)
+        if result.pass_rate < threshold:
+            raise RuntimeError(
+                f"CI gate failed: {result.pass_rate:.1%} < {threshold:.0%}"
+            )
         return result
