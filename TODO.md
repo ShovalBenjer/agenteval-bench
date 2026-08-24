@@ -15,13 +15,16 @@ Status reflects current progress.
 
 ### v0.2 — LLM-as-Judge & Regression
 - [ ] LLM-as-judge scoring with configurable judge model
-- [ ] `agenteval-bench compare` for run-over-run regression diffs
-- [ ] Report generation (markdown + JSON)
+- [ ] `agenteval-bench compare` for run-over-run regression diffs (planned)
+- [ ] Report generation (markdown + JSON) (planned)
 
 ### v0.3 — Rich CLI & Extensibility
 - [ ] typer-based CLI with rich output
 - [ ] Plugin system for custom scorers
 - [ ] Dashboard for historical eval results
+
+### In Progress
+- [ ] `cost_bound` enforcement in engine
 
 ## Operations
 

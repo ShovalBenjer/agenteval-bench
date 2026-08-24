@@ -22,8 +22,10 @@ Teams deploying LLM agents have no systematic way to answer: "is my agent gettin
 ### Out of scope (v2+)
 - Web UI / dashboard
 - Distributed eval execution
-- Custom scorer plugins (beyond built-in)
 - Agent trace replay
+
+### Deferred to v0.3
+- Custom scorer plugins (built-in extensibility)
 
 ## API Surface
 
@@ -80,8 +82,9 @@ print(result.summary())
 ## Acceptance Criteria
 
 - [x] Core eval engine loads YAML suites and scores outputs deterministically
+- [x] CI mode with non-zero exit on regression
 - [ ] LLM-judge integration with cost bounding
-- [ ] CI mode with non-zero exit on regression
-- [ ] Compare command for run-vs-run regression detection
+- [ ] Compare command for run-vs-run regression detection (planned)
+- [ ] Report generation — markdown + JSON (planned)
 - [ ] README accurate and AEO-optimized
 - [ ] CI green on GitHub Actions
