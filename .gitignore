@@ -12,3 +12,11 @@ build/
 htmlcov/
 .coverage
 uv.lock
+.idea/
+.vscode/
+.DS_Store
+*.swp
+*.swo
+coverage.xml
+.hypothesis/
+*.log

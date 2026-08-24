@@ -1,5 +1,10 @@
 # agenteval-bench
 
+[![CI](https://github.com/ShovalBenjer/agenteval-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/ShovalBenjer/agenteval-bench/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/agenteval-bench)](https://pypi.org/project/agenteval-bench/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![Python](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/downloads/)
+
 > Production-grade CLI for evaluating, grading, and comparing LLM agent outputs — with deterministic scoring, regression tracking, and CI integration.
 
 **Think `pytest` for agent outputs.**
@@ -17,7 +22,7 @@ The agent ecosystem is exploding — but nobody has a good answer for evaluating
 ## Tech Stack
 
 - **Language**: Python 3.11+
-- **CLI**: Built-in argparse (typer planned for v0.2)
+- **CLI**: Built-in argparse (typer planned for v0.3)
 - **Scoring**: Deterministic matchers (exact, contains, regex, JSON schema) + LLM-as-judge (v0.2)
 - **Package manager**: uv
 - **Testing**: pytest
@@ -102,16 +107,6 @@ cases:
     skip: false                                # skip this case
 ```
 
-## Scoring Strategies
-
-| Strategy | Description | Deterministic |
-|----------|-------------|--------------|
-| `exact` | Exact string match (whitespace-trimmed) | Yes |
-| `contains` | All needles present in output | Yes |
-| `regex` | Regex pattern found in output | Yes |
-| `json_schema` | Valid JSON with required keys | Yes |
-| LLM-as-judge | Model grades output against rubric | No (planned) |
-
 ## CI gating
 
 Run a golden replay suite (each case carries a recorded `output`) and fail the
@@ -153,6 +148,11 @@ Exit codes: `0` clean or gate passed, `1` bad input, `2` gate failed.
   "keywords": ["LLM", "agent", "evaluation", "benchmark", "MLOps", "CI", "testing", "AI"]
 }
 -->
+
+## Contributing & Changelog
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) — how to set up, test, and submit changes.
+- [CHANGELOG.md](CHANGELOG.md) — release notes and breaking changes.
 
 ## License
 
