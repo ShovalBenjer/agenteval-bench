@@ -1,7 +1,5 @@
 """CLI CI-gate tests: a replay suite must exit non-zero below threshold."""
 
-import pytest
-
 from agenteval_bench import cli
 
 REPLAY_SUITE = """
