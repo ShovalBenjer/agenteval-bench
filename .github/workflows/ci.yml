@@ -15,11 +15,45 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Install uv
         uses: astral-sh/setup-uv@v4
+      - name: Cache uv
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/uv
+          key: ${{ runner.os }}-uv-${{ hashFiles('pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-uv-
       - name: Install dependencies
         run: uv pip install -e ".[dev,lint]" --system
       - name: Lint
         run: python -m ruff check src/ tests/
+      - name: Format check
+        run: python -m ruff format --check src/ tests/
+      - name: Type check
+        run: mypy src/agenteval_bench/ --strict
       - name: Test
-        run: pytest tests/ -v --tb=short
+        run: pytest -x --cov=agenteval_bench --cov-report=xml --cov-report=term
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+      - name: Security scan
+        run: |
+          pip install bandit
+          bandit -r src/agenteval_bench/ -f json -o bandit-report.json
+      - name: Upload security report
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: bandit-report
+          path: bandit-report.json
       - name: Eval gate (golden replay suite)
+        id: eval_gate
         run: agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9
+        continue-on-error: true
+      - name: CI gate failure
+        if: steps.eval_gate.outcome == 'failure'
+        run: |
+          echo "CI gate failed: golden replay suite did not meet threshold"
+          exit 1
