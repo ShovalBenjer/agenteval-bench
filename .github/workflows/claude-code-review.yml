@@ -43,4 +43,4 @@ jobs:
             - Do not report style that CI already enforces.
           claude_args: |
             --model claude-sonnet-5
-            --max-turns 10
+            --max-turns 20
