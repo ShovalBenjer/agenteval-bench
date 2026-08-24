@@ -1,33 +1,15 @@
 """Tests for the core eval engine — RED then GREEN."""
 
-import os
-import tempfile
-
 import pytest
 
 from agenteval_bench.engine import EvalRunner
 from agenteval_bench.models import EvalSuite
 from agenteval_bench.scoring import DeterministicScorer
 
-# --- Helpers ---
-
-def _write_yaml(content: str) -> str:
-    fd, path = tempfile.mkstemp(suffix=".yaml")
-    with os.fdopen(fd, "w") as f:
-        f.write(content)
-    return path
-
-
-def _dummy_agent(response: str):
-    """Create an agent function that always returns the given response."""
-    return lambda _input: response
-
-
-# --- Suite loading ---
 
 class TestEvalSuiteLoading:
-    def test_loads_valid_yaml(self):
-        path = _write_yaml("""
+    def test_loads_valid_yaml(self, write_yaml):
+        path = write_yaml("""
 name: test-suite
 version: 1
 cases:
@@ -36,26 +18,20 @@ cases:
     expected:
       exact: "world"
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            assert suite.name == "test-suite"
-            assert len(suite.cases) == 1
-            assert suite.cases[0].id == "case-1"
-            assert suite.cases[0].input == "hello"
-            assert suite.cases[0].expected.exact == "world"
-        finally:
-            os.unlink(path)
+        suite = EvalSuite.from_yaml(path)
+        assert suite.name == "test-suite"
+        assert len(suite.cases) == 1
+        assert suite.cases[0].id == "case-1"
+        assert suite.cases[0].input == "hello"
+        assert suite.cases[0].expected.exact == "world"
 
-    def test_rejects_invalid_yaml(self):
-        path = _write_yaml("just a string, not a mapping")
-        try:
-            with pytest.raises(TypeError, match="expected mapping"):
-                EvalSuite.from_yaml(path)
-        finally:
-            os.unlink(path)
+    def test_rejects_invalid_yaml(self, write_yaml):
+        path = write_yaml("just a string, not a mapping")
+        with pytest.raises(TypeError, match="expected mapping"):
+            EvalSuite.from_yaml(path)
 
-    def test_loads_contains_matcher(self):
-        path = _write_yaml("""
+    def test_loads_contains_matcher(self, write_yaml):
+        path = write_yaml("""
 name: contains-suite
 cases:
   - id: greet
@@ -63,14 +39,9 @@ cases:
     expected:
       contains: ["hello", "welcome"]
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            assert suite.cases[0].expected.contains == ["hello", "welcome"]
-        finally:
-            os.unlink(path)
+        suite = EvalSuite.from_yaml(path)
+        assert suite.cases[0].expected.contains == ["hello", "welcome"]
 
-
-# --- Deterministic scoring ---
 
 class TestDeterministicScorer:
     def test_exact_match_passes(self):
@@ -135,11 +106,9 @@ class TestDeterministicScorer:
         assert result.passed is False
 
 
-# --- Engine integration ---
-
 class TestEvalRunner:
-    def test_run_all_pass(self):
-        path = _write_yaml("""
+    def test_run_all_pass(self, write_yaml):
+        path = write_yaml("""
 name: all-pass
 cases:
   - id: c1
@@ -151,24 +120,21 @@ cases:
     expected:
       contains: ["hello"]
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            runner = EvalRunner()
+        suite = EvalSuite.from_yaml(path)
+        runner = EvalRunner()
 
-            def agent_fn(inp: str) -> str:
-                if "2+2" in inp:
-                    return "4"
-                return "hello there"
+        def agent_fn(inp: str) -> str:
+            if "2+2" in inp:
+                return "4"
+            return "hello there"
 
-            result = runner.run(suite, agent_fn)
-            assert result.passed == 2
-            assert result.failed == 0
-            assert result.pass_rate == 1.0
-        finally:
-            os.unlink(path)
+        result = runner.run(suite, agent_fn)
+        assert result.passed == 2
+        assert result.failed == 0
+        assert result.pass_rate == 1.0
 
-    def test_run_mixed_results(self):
-        path = _write_yaml("""
+    def test_run_mixed_results(self, write_yaml):
+        path = write_yaml("""
 name: mixed
 cases:
   - id: pass
@@ -180,22 +146,19 @@ cases:
     expected:
       exact: "nope"
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            runner = EvalRunner()
+        suite = EvalSuite.from_yaml(path)
+        runner = EvalRunner()
 
-            def agent_fn(inp: str) -> str:
-                return "ok"
+        def agent_fn(inp: str) -> str:
+            return "ok"
 
-            result = runner.run(suite, agent_fn)
-            assert result.passed == 1
-            assert result.failed == 1
-            assert result.pass_rate == 0.5
-        finally:
-            os.unlink(path)
+        result = runner.run(suite, agent_fn)
+        assert result.passed == 1
+        assert result.failed == 1
+        assert result.pass_rate == 0.5
 
-    def test_skip_case(self):
-        path = _write_yaml("""
+    def test_skip_case(self, write_yaml):
+        path = write_yaml("""
 name: skip-test
 cases:
   - id: active
@@ -208,15 +171,12 @@ cases:
       exact: "hello"
     skip: true
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            runner = EvalRunner()
-            result = runner.run(suite, lambda _: "hello")
-            assert result.passed == 1
-            assert result.skipped == 1
-            assert result.total == 2
-        finally:
-            os.unlink(path)
+        suite = EvalSuite.from_yaml(path)
+        runner = EvalRunner()
+        result = runner.run(suite, lambda _: "hello")
+        assert result.passed == 1
+        assert result.skipped == 1
+        assert result.total == 2
 
     def test_summary_format(self):
         from agenteval_bench.models import RunResult
@@ -225,8 +185,8 @@ cases:
         assert "test" in summary
         assert "88.9%" in summary
 
-    def test_cost_bound_loaded(self):
-        path = _write_yaml("""
+    def test_cost_bound_loaded(self, write_yaml):
+        path = write_yaml("""
 name: cost-test
 cost_bound:
   max_input_tokens: 500
@@ -237,9 +197,6 @@ cases:
     expected:
       exact: "hi"
 """)
-        try:
-            suite = EvalSuite.from_yaml(path)
-            assert suite.cost_bound.max_input_tokens == 500
-            assert suite.cost_bound.max_output_tokens == 50
-        finally:
-            os.unlink(path)
+        suite = EvalSuite.from_yaml(path)
+        assert suite.cost_bound.max_input_tokens == 500
+        assert suite.cost_bound.max_output_tokens == 50
