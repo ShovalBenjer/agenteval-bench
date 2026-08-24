@@ -1,7 +1,5 @@
 """CLI tests: help, flags, error paths, and subcommands."""
 
-import pytest
-
 from agenteval_bench import cli
 
 
@@ -86,7 +84,7 @@ def test_file_not_found(monkeypatch, capsys):
 
 
 def test_malformed_yaml(monkeypatch, _write_yaml, capsys):
-    path = _write_yaml("name: \"unclosed\n")
+    path = _write_yaml('name: "unclosed\n')
     code, _, err = _run(["run", "--suite", path], monkeypatch, capsys)
     assert code == 1
     assert "malformed YAML" in err

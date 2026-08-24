@@ -51,7 +51,7 @@ cases:
             EvalSuite.from_yaml("/nonexistent/path/to/suite.yaml")
 
     def test_yaml_syntax_error_raises(self, _write_yaml):
-        path = _write_yaml("name: \"unclosed string\n")
+        path = _write_yaml('name: "unclosed string\n')
         with pytest.raises(yaml.YAMLError):
             EvalSuite.from_yaml(path)
 

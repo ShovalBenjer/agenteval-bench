@@ -31,7 +31,12 @@ class EvalRunner:
                 agent_output = agent_fn(case.input)
             except Exception as exc:
                 results.append(
-                    EvalResult(case_id=case.id, passed=False, score=0.0, details={"error": str(exc)})
+                    EvalResult(
+                        case_id=case.id,
+                        passed=False,
+                        score=0.0,
+                        details={"error": str(exc)},
+                    )
                 )
                 continue
 
