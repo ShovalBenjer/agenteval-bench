@@ -1,1 +1,37 @@
-*       @claude-setup/owners
+# CODEOWNERS — agenteval-bench
+#
+# @ShovalBenjer holds broad ownership of the repository. Subdirectory rules below
+# assign area experts; when an expert handle is added, list them after the primary
+# owner on the same line, e.g.:
+#   /src/agenteval_bench/scoring.py   @ShovalBenjer @scoring-expert
+#
+# The most specific rule wins. Order does not matter for matches.
+
+# Broad ownership — everything not otherwise specified
+*       @ShovalBenjer
+
+# Documentation
+/docs/          @ShovalBenjer
+README.md       @ShovalBenjer
+TODO.md         @ShovalBenjer
+CLAUDE-OS.md    @ShovalBenjer
+
+# CI / release automation
+/.github/       @ShovalBenjer
+
+# Core scoring engine
+/src/agenteval_bench/scoring.py   @ShovalBenjer
+/src/agenteval_bench/engine.py    @ShovalBenjer
+
+# Data models & public API
+/src/agenteval_bench/models.py    @ShovalBenjer
+/src/agenteval_bench/__init__.py  @ShovalBenjer
+
+# CLI entry point
+/src/agenteval_bench/cli.py       @ShovalBenjer
+
+# Example suites (golden replay) — treat as test fixtures
+/examples/       @ShovalBenjer
+
+# Tests
+/tests/          @ShovalBenjer
