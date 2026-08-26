@@ -72,17 +72,20 @@ def main() -> None:
             return recorded.get(next(replay_ids)) or ""
 
         runner = EvalRunner()
-        result = runner.run(suite, replay_fn)
+        if ci_mode:
+            try:
+                result = runner.run_ci(suite, replay_fn, threshold)
+            except RuntimeError:
+                sys.exit(2)
+        else:
+            result = runner.run(suite, replay_fn)
+
         print(result.summary())
         if missing:
             print(f"Note: {len(missing)} case(s) had no recorded output and were skipped.")
 
         if ci_mode:
-            ok = result.pass_rate >= threshold
-            status = "PASS" if ok else "FAIL"
-            print(f"CI gate: {result.pass_rate:.1%} vs threshold {threshold:.0%} -> {status}")
-            if not ok:
-                sys.exit(2)
+            print(f"CI gate: {result.pass_rate:.1%} vs threshold {threshold:.0%} -> PASS")
     elif args[0] == "compare":
         print("compare: not yet implemented (stub)")
     elif args[0] == "report":
