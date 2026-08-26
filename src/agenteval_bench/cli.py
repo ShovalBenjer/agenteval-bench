@@ -41,6 +41,10 @@ def main() -> None:
             print("Error: --suite <file> is required", file=sys.stderr)
             sys.exit(1)
 
+        if not 0.0 <= threshold <= 1.0:
+            print(f"Error: --threshold must be between 0.0 and 1.0, got {threshold}", file=sys.stderr)
+            sys.exit(1)
+
         suite = EvalSuite.from_yaml(suite_path)
         # Standalone CLI scores a replay suite: each case carries a recorded
         # `output`. Cases without one are skipped (a live agent would fill them
