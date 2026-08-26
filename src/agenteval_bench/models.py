@@ -12,6 +12,7 @@ class ExpectedOutput:
 
     exact: str | None = None
     contains: list[str] = field(default_factory=list)
+    contains_ignore_case: list[str] = field(default_factory=list)
     regex: str | None = None
     json_schema: dict[str, Any] | None = None
 
@@ -67,11 +68,13 @@ class EvalSuite:
             raise TypeError(f"Invalid eval suite: expected mapping, got {type(data).__name__}")
 
         cases = []
+        case_ids: list[str] = []
         for case_data in data.get("cases", []):
             expected_data = case_data.get("expected", {})
             expected = ExpectedOutput(
                 exact=expected_data.get("exact"),
                 contains=expected_data.get("contains", []),
+                contains_ignore_case=expected_data.get("contains_ignore_case", []),
                 regex=expected_data.get("regex"),
                 json_schema=expected_data.get("json_schema"),
             )
@@ -83,16 +86,18 @@ class EvalSuite:
                 )
                 for r in case_data.get("rubric", [])
             ]
-            cases.append(
-                EvalCase(
-                    id=case_data["id"],
-                    input=case_data["input"],
-                    expected=expected,
-                    rubric=rubric,
-                    skip=case_data.get("skip", False),
-                    output=case_data.get("output"),
-                )
+            case = EvalCase(
+                id=case_data["id"],
+                input=case_data["input"],
+                expected=expected,
+                rubric=rubric,
+                skip=case_data.get("skip", False),
+                output=case_data.get("output"),
             )
+            if case.id in case_ids:
+                raise ValueError(f"Duplicate case id: {case.id}")
+            case_ids.append(case.id)
+            cases.append(case)
 
         cost_data = data.get("cost_bound", {})
         cost_bound = CostBound(

@@ -40,6 +40,16 @@ class DeterministicScorer:
                 "missing": [n for n in expected.contains if n not in agent_output],
             }
 
+        if expected.contains_ignore_case:
+            lowered = agent_output.lower()
+            all_present = all(needle.lower() in lowered for needle in expected.contains_ignore_case)
+            checks["contains_ignore_case"] = all_present
+            weights["contains_ignore_case"] = 1.0
+            details["contains_ignore_case"] = {
+                "needles": expected.contains_ignore_case,
+                "missing": [n for n in expected.contains_ignore_case if n.lower() not in lowered],
+            }
+
         if expected.regex is not None:
             match = re.search(expected.regex, agent_output)
             checks["regex"] = match is not None

@@ -2,7 +2,7 @@ import pytest
 
 
 @pytest.fixture
-def write_yaml(tmp_path):
+def _write_yaml(tmp_path):
     """Factory fixture for writing temporary YAML files."""
 
     def _write(content: str) -> str:
@@ -14,7 +14,7 @@ def write_yaml(tmp_path):
 
 
 @pytest.fixture
-def agent_fn():
+def _dummy_agent():
     """Create an agent function that always returns the given response."""
 
     def _dummy_agent(response: str):
