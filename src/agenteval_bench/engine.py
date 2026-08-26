@@ -64,7 +64,5 @@ class EvalRunner:
         """Run in CI mode — raises RuntimeError when pass_rate is below threshold."""
         result = self.run(suite, agent_fn)
         if result.pass_rate < threshold:
-            raise RuntimeError(
-                f"CI gate failed: {result.pass_rate:.1%} < {threshold:.0%}"
-            )
+            raise RuntimeError(f"CI gate failed: {result.pass_rate:.1%} < {threshold:.0%}")
         return result

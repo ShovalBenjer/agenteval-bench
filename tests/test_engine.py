@@ -123,6 +123,7 @@ class TestDeterministicScorer:
 
     def test_invalid_regex_raises(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t6", input="q", expected=ExpectedOutput(regex="[invalid"))
         scorer = DeterministicScorer()
         with pytest.raises(re.error):
@@ -130,6 +131,7 @@ class TestDeterministicScorer:
 
     def test_no_expected_returns_failure(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="t7", input="q", expected=ExpectedOutput())
         scorer = DeterministicScorer()
         result = scorer.score(case, "anything")
@@ -156,6 +158,7 @@ class TestDeterministicScorer:
 
     def test_multiple_matchers_all_pass(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(
             id="m1",
             input="q",
@@ -173,6 +176,7 @@ class TestDeterministicScorer:
 
     def test_multiple_matchers_one_fails(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(
             id="m2",
             input="q",
@@ -187,6 +191,7 @@ class TestDeterministicScorer:
 
     def test_contains_ignore_case_passes(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(
             id="ci1",
             input="q",
@@ -198,6 +203,7 @@ class TestDeterministicScorer:
 
     def test_contains_ignore_case_fails(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(
             id="ci2",
             input="q",
@@ -209,6 +215,7 @@ class TestDeterministicScorer:
 
     def test_unicode_input_output(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="u1", input="你好", expected=ExpectedOutput(exact="世界"))
         scorer = DeterministicScorer()
         result = scorer.score(case, "世界")
@@ -216,6 +223,7 @@ class TestDeterministicScorer:
 
     def test_empty_string_input_output(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         case = EvalCase(id="e1", input="", expected=ExpectedOutput(exact=""))
         scorer = DeterministicScorer()
         result = scorer.score(case, "")
@@ -223,6 +231,7 @@ class TestDeterministicScorer:
 
     def test_very_long_input_output(self):
         from agenteval_bench.models import EvalCase, ExpectedOutput
+
         long_str = "x" * 100_000
         case = EvalCase(id="l1", input=long_str, expected=ExpectedOutput(exact=long_str))
         scorer = DeterministicScorer()

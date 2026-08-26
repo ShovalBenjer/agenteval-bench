@@ -17,7 +17,7 @@ def main() -> None:
     if not args or args[0] in ("--help", "-h"):
         print("agenteval-bench — LLM agent evaluation CLI")
         print("Usage: agenteval-bench run --suite <file>")
-        print("       agenteval-bench compare <run_a> <run_b>")
+        print("       agenteval-bench compare")
         print("       agenteval-bench report")
         return
 
