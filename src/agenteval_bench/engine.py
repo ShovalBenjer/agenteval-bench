@@ -2,11 +2,10 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 from agenteval_bench.models import EvalResult, EvalSuite, RunResult
 from agenteval_bench.scoring import DeterministicScorer
-
 
 AgentFn = Callable[[str], str]
 
