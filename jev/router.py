@@ -33,7 +33,7 @@ def _ollama_alive(url: str, timeout: float = 1.5) -> bool:
     try:
         with urllib.request.urlopen(url.rstrip("/") + "/api/tags", timeout=timeout) as r:
             return r.status == 200
-    except Exception:
+    except OSError:  # availability probe: any network failure means "not alive"
         return False
 
 
