@@ -21,6 +21,12 @@ Both files: one score per line, paired by line (same case, same order).
 `--n-boot`, `--seed`, `--alpha` are configurable; `--strict` fails on
 inconclusive results too, not just regressions.
 
+Executable form: freeze the baseline with
+`agenteval-bench baseline --suite <yaml> --seed 42 --out baselines/golden.json`
+and compare candidates with
+`python tools/paired_bootstrap.py baselines/golden.json candidate.txt`
+(snapshots pin seed + suite digest; see `docs/DELTA-BASELINE.md`).
+
 **Gate policy:** block the merge only on a statistically significant
 regression (whole CI below 0). "Inconclusive" means "collect more cases or
 accept the risk explicitly" — not "ship it and forget it." Report the CI, not
