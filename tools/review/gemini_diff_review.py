@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Gemini as a decorrelated second reviewer over a PULL REQUEST DIFF ONLY.
 
 Data boundary: Gemini Free Tier terms permit Google to use submitted content
@@ -145,9 +144,8 @@ def emit_github_annotations(findings: list, stream=None) -> int:
                 _wc_escape(str(f.get("why", "")), False)), file=out)
             written += 1
         if len(rows) > ANNOTATION_CAP:
-            print("::notice::{} {} finding(s) not annotated; GitHub renders {} per "
-                  "level per step.".format(
-                      len(rows) - ANNOTATION_CAP, sev, ANNOTATION_CAP), file=out)
+            print(f"::notice::{len(rows) - ANNOTATION_CAP} {sev} finding(s) not annotated; GitHub renders {ANNOTATION_CAP} per "
+                  "level per step.", file=out)
     return written
 
 
@@ -171,9 +169,9 @@ def request_review(diff: str, key: str) -> dict:
             payload = json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         # The body can echo request context; the status alone is the safe signal.
-        raise GeminiError("Gemini API returned HTTP {}".format(exc.code)) from None
+        raise GeminiError(f"Gemini API returned HTTP {exc.code}") from None
     except Exception as exc:  # noqa: BLE001
-        raise GeminiError("Gemini API call failed: {}".format(type(exc).__name__)) from None
+        raise GeminiError(f"Gemini API call failed: {type(exc).__name__}") from None
     return parse_response(payload)
 
 
@@ -218,8 +216,8 @@ def cmd_review(args: argparse.Namespace) -> int:
               "(see the data boundary in this file's docstring)", file=sys.stderr)
         return 2
     if len(diff.encode("utf-8")) > MAX_DIFF_BYTES:
-        print("gemini-review: diff exceeds {} bytes; reviewing the first slice "
-              "only".format(MAX_DIFF_BYTES))
+        print(f"gemini-review: diff exceeds {MAX_DIFF_BYTES} bytes; reviewing the first slice "
+              "only")
         diff = diff.encode("utf-8")[:MAX_DIFF_BYTES].decode("utf-8", "ignore")
 
     try:
@@ -227,13 +225,13 @@ def cmd_review(args: argparse.Namespace) -> int:
     except GeminiError as exc:
         # Degrade loudly, never silently: a dead second reviewer must be visible
         # as dead rather than read as "found nothing".
-        print("::warning title=gemini-review unavailable::{}".format(exc))
-        print("gemini-review: DEGRADED, {}".format(exc), file=sys.stderr)
+        print(f"::warning title=gemini-review unavailable::{exc}")
+        print(f"gemini-review: DEGRADED, {exc}", file=sys.stderr)
         return 0 if args.soft_fail else 1
 
     findings = result["findings"]
     written = emit_github_annotations(findings)
-    print("gemini-review: {} finding(s), {} annotated".format(len(findings), written))
+    print(f"gemini-review: {len(findings)} finding(s), {written} annotated")
     print("summary: {}".format(result["summary"]))
     if args.json_out:
         Path(args.json_out).write_text(
