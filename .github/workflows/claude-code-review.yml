@@ -14,7 +14,10 @@ concurrency:
 jobs:
   review:
     # Skip drafts; reviews restart when marked ready
-    if: ${{ !github.event.pull_request.draft }}
+    # Skip bot-triggered events: anthropics/claude-code-action@v1 crashes when
+    # the actor login includes the [bot] suffix (GitHub GraphQL user(login:) does
+    # not accept it). Human-triggered events are unaffected.
+    if: ${{ !github.event.pull_request.draft && !github.actor.endsWith('[bot]') }}
     runs-on: ubuntu-latest
     permissions:
       contents: read
