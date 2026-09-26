@@ -7,6 +7,11 @@ Usage:
     from jev.router import route
     r = route("summarize this log")
     print(r.name, r.model, r.base_url)
+
+GUARD (ADR-0009): the router ROUTES; it never JUDGES and never GATES.
+It returns a Route, never a verdict, score, ranking, or approval. Escalation is
+a routing choice (a different, more capable Route), not a gate on an outcome.
+Do not add judge/verdict/gate/score functions to this package.
 """
 from __future__ import annotations
 
@@ -14,6 +19,21 @@ import dataclasses
 import os
 import urllib.request
 from dataclasses import dataclass, field
+
+from jev.decisions import log_decision
+
+# Complexity >= ESCALATE_AT means "too hard for the local SLM": escalate to a
+# more capable route. ADR-0009 requires this threshold to be explicit,
+# env-overridable, and audited — a magic number buried in code is how a
+# mis-tuned router silently degrades quality.
+ESCALATE_AT = float(os.getenv("JEV_ESCALATE_AT", "0.55"))
+
+# The uncertain band around the threshold where the heuristic is least sure.
+# A task landing here is escalated to the best *available* route even when the
+# raw complexity would have kept it local, because the cost of a wrong "kept
+# local" (an invalid, ~19x-more-likely bad SLM output) dwarfs the cost of a
+# wrongly-escalated cheap free-tier call.
+UNCERTAIN_BAND = float(os.getenv("JEV_UNCERTAIN_BAND", "0.10"))
 
 
 @dataclass
@@ -58,11 +78,44 @@ def estimate_complexity(task: str) -> float:
     return min(score, 1.0)
 
 
+def _confidence(complexity: float) -> float:
+    """Distance from the escalation boundary, 0..1.
+
+    The router's only claim is how far the task sits from the threshold it
+    acted on — not a quality judgment, not a verdict (see GUARD above).
+    """
+    return min(1.0, abs(complexity - ESCALATE_AT) / max(ESCALATE_AT, 1e-9))
+
+
+def _decide(complexity: float, local: Route, gh: Route, budget: str) -> tuple:
+    """Return (route, kept_local, escalated, reason). Pure, for testing."""
+    uncertain = abs(complexity - ESCALATE_AT) <= UNCERTAIN_BAND
+    hard = complexity >= ESCALATE_AT
+    if local.available and not hard and not uncertain:
+        return (local, True, False,
+                f"complexity {complexity:.2f} clearly below threshold {ESCALATE_AT}")
+    # Escalate: to the more capable free route when it exists.
+    if gh.available:
+        if uncertain and not hard:
+            reason = (f"complexity {complexity:.2f} in uncertain band "
+                      f"[{ESCALATE_AT - UNCERTAIN_BAND:.2f}, {ESCALATE_AT + UNCERTAIN_BAND:.2f}]")
+        else:
+            reason = f"complexity {complexity:.2f} >= threshold {ESCALATE_AT}"
+        return gh, False, True, reason
+    if local.available:
+        return (local, True, False,
+                f"no capable route up; fell back to local (complexity {complexity:.2f})")
+    raise RuntimeError("no model route available: start Ollama or set JEV_MODEL_TOKEN")
+
+
 def route(task: str, budget: str = "free") -> Route:
     """Pick the cheapest route that can plausibly handle the task.
 
     budget: "free" (never paid), "balanced" (prefer free, allow paid when hard),
             "max-quality" (best capable route regardless of cost).
+
+    Every decision is appended to the audit log (jev/decisions.jsonl) with the
+    kept-local reason and confidence — ADR-0009.
     """
     complexity = estimate_complexity(task)
     routes = [dataclasses.replace(r) for r in default_routes()]
@@ -72,11 +125,9 @@ def route(task: str, budget: str = "free") -> Route:
     gh = routes[1]
     gh.available = bool(os.getenv(gh.api_key_env or ""))
 
-    # Local small LM wins for simple tasks when it is up.
-    if local.available and (complexity < 0.55 or budget == "free"):
-        return local
-    if gh.available:
-        return gh
-    if local.available:
-        return local
-    raise RuntimeError("no model route available: start Ollama or set JEV_MODEL_TOKEN")
+    chosen, kept_local, escalated, reason = _decide(complexity, local, gh, budget)
+    log_decision(task=task, route_name=chosen.name, route_kind=chosen.kind,
+                 complexity=complexity, confidence=_confidence(complexity),
+                 kept_local=kept_local, reason=reason,
+                 escalated=escalated, budget=budget)
+    return chosen

@@ -59,6 +59,9 @@ runs/
 # ----- Logs -----
 *.log
 
+# jev routing decision telemetry: append-only local audit log, never committed
+jev/decisions.jsonl
+
 # ----- IDE / editor -----
 .idea/
 .vscode/
