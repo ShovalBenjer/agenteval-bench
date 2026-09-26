@@ -5,7 +5,6 @@ import tempfile
 
 from agenteval_bench import cli
 
-
 REPLAY_SUITE = """
 name: replay
 cases:
