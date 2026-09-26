@@ -1,0 +1,33 @@
+name: coffee-break
+# Agent-to-agent coffee break: a casual, creative deliberation over one topic.
+# Trigger: workflow_dispatch (topic input), weekly schedule, or label an issue `coffee-break`.
+# Ritual and personas: .github/agent-coffee/COFFEE.md
+on:
+  workflow_dispatch:
+    inputs:
+      topic:
+        description: "Topic or blocker to brainstorm"
+        required: true
+  schedule:
+    - cron: "30 14 * * 5"
+  issues:
+    types: [labeled]
+permissions:
+  discussions: write
+  issues: read
+jobs:
+  deliberate:
+    if: github.event_name != 'issues' || github.event.label.name == 'coffee-break'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run coffee-break deliberation
+        env:
+          TOPIC: ${{ inputs.topic || github.event.issue.title || 'open brainstorm: current blockers' }}
+          TOPIC_BODY: ${{ github.event.issue.body || '' }}
+          JEV_MODEL_TOKEN: ${{ secrets.JEV_MODEL_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: python3 .github/agent-coffee/run_coffee.py
