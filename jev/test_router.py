@@ -3,7 +3,7 @@ import os
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-from jev.router import estimate_complexity, route  # noqa: E402
+from jev.router import estimate_complexity, route
 
 
 def test_complexity_orders_tasks():
