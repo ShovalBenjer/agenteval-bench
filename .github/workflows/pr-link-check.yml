@@ -1,0 +1,18 @@
+name: pr-link-check
+on:
+  pull_request:
+    types: [opened, edited, synchronize]
+jobs:
+  check:
+    if: github.actor != 'dependabot[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require linked issue
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          if ! printf '%s' "$BODY" | grep -Ei 'fixes #[0-9]+|closes #[0-9]+|resolves #[0-9]+|relates to #[0-9]+|part of #[0-9]+'; then
+            echo "::error::PR body must link an issue (e.g. 'Fixes #12')."
+            exit 1
+          fi
+          echo "Issue link present."
