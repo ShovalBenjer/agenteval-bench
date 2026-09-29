@@ -37,7 +37,7 @@ permissions:
 jobs:
   gemini-review:
     if: ${{ !github.event.pull_request.draft }}
-    runs-on: [self-hosted, linux]
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
