@@ -26,7 +26,7 @@ Prints text tables. No network. Deterministic.
 
 from __future__ import annotations
 
-from .baselines import first_price, myerson_uniform, second_price
+from .baselines import first_price, myerson_uniform, second_price, second_price_reserve
 from .battery import CATEGORY_COUNTS, build_battery
 from .behavior import behavioral_distance, run_mechanism
 from .oracle import NoveltyOracle
@@ -34,29 +34,8 @@ from .types import Mechanism, OracleConfig, ValuationProfile
 
 
 def _reserve_mechanism(reserve: float) -> Mechanism:
-    base = second_price()
-
-    def allocate(values: tuple[float, ...]) -> tuple[int, ...]:
-        top = max(values)
-        if top < reserve:
-            return tuple(0 for _ in values)
-        return base.allocate(values)
-
-    def pay(values: tuple[float, ...], allocation: tuple[int, ...]) -> tuple[float, ...]:
-        if sum(allocation) == 0:
-            return tuple(0.0 for _ in values)
-        _, payments = run_mechanism(base, "eda", values)
-        winner = allocation.index(1)
-        price = max(payments[winner], reserve)
-        return tuple(price if i == winner else 0.0 for i in range(len(values)))
-
-    return Mechanism(
-        name=f"reserve-{reserve:.1f}",
-        allocate=allocate,
-        pay=pay,
-        description=f"Second-price with reserve {reserve}.",
-        source=None,
-    )
+    # Single source of truth lives in baselines.second_price_reserve.
+    return second_price_reserve(reserve)
 
 
 def _noisy_copy(noise_std: float, tag: int) -> Mechanism:
