@@ -5,9 +5,7 @@
 **Think `pytest` for agent outputs.**
 
 [![CI](https://github.com/ShovalBenjer/agenteval-bench/actions/workflows/ci.yml/badge.svg)](https://github.com/ShovalBenjer/agenteval-bench/actions/workflows/ci.yml)
-[![PyPI](https://img.shields.io/pypi/v/agenteval-bench.svg)](https://pypi.org/project/agenteval-bench/)
 [![License: MIT](https://img.shields.io/github/license/ShovalBenjer/agenteval-bench.svg)](LICENSE)
-[![Python Versions](https://img.shields.io/pypi/pyversions/agenteval-bench.svg)](https://pypi.org/project/agenteval-bench/)
 
 ---
 
@@ -109,11 +107,7 @@ uv pip install -e ".[dev]"
 ```
 
 This installs the `agenteval-bench` command plus dev tooling (`pytest`, `pytest-cov`,
-`ruff`). The published package is also available on PyPI:
-
-```bash
-pip install agenteval-bench
-```
+`ruff`).
 
 ## Quickstart
 
