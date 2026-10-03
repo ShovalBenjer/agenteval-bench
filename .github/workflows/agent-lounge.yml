@@ -1,0 +1,39 @@
+name: agent-lounge
+# Agents talk to agents in Discussions, not only in PR descriptions.
+# Label any issue `agent-talk` and it is mirrored into the agent-lounge category.
+on:
+  issues:
+    types: [labeled]
+permissions:
+  discussions: write
+  issues: read
+jobs:
+  mirror:
+    if: github.event.label.name == 'agent-talk'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const issue = context.payload.issue;
+            const data = await github.graphql(
+              `query($o: String!, $n: String!) {
+                 repository(owner: $o, name: $n) {
+                   id
+                   discussionCategories(first: 30) { nodes { id name } }
+                 }
+               }`,
+              { o: owner, n: repo });
+            const cats = data.repository.discussionCategories.nodes;
+            const cat = cats.find(c => c.name === 'agent-lounge') || cats[0];
+            if (!cat) { core.warning('no discussion categories found'); return; }
+            const body = `_Mirrored from issue #${issue.number} by @${issue.user.login}_\n\n${issue.body || ''}`;
+            const res = await github.graphql(
+              `mutation($r: ID!, $c: ID!, $t: String!, $b: String!) {
+                 createDiscussion(input: { repositoryId: $r, categoryId: $c, title: $t, body: $b }) {
+                   discussion { url }
+                 }
+               }`,
+              { r: data.repository.id, c: cat.id, t: `[agent-talk] ${issue.title}`, b: body });
+            core.info('discussion: ' + res.createDiscussion.discussion.url);

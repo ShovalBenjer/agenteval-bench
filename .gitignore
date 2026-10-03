@@ -1,0 +1,81 @@
+# ----- Python bytecode / compilation -----
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# ----- Packaging / build artifacts -----
+build/
+dist/
+*.egg-info/
+*.egg
+pip-wheel-metadata/
+.eggs/
+
+# ----- Virtual environments -----
+.venv/
+venv/
+env/
+ENV/
+
+# ----- Dependency locks (generated per-machine) -----
+uv.lock
+
+# ----- Test / coverage artifacts -----
+.pytest_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+.tox/
+.nox/
+.cache/
+.hypothesis/
+
+# ----- Lint / type-check caches -----
+.ruff_cache/
+.mypy_cache/
+.dmypy.json
+.pyre/
+.pytype/
+
+# ----- Notebooks -----
+.ipynb_checkpoints/
+
+# ----- Docs build output -----
+docs/_build/
+site/
+
+# ----- Generated eval artifacts (planned: report/compare outputs) -----
+reports/
+runs/
+*.report.json
+
+# ----- Secrets / local config -----
+.env
+.env.*
+*.pkl
+
+# ----- Logs -----
+*.log
+
+# jev routing decision telemetry: append-only local audit log, never committed
+jev/decisions.jsonl
+
+# ----- IDE / editor -----
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+
+# ----- OS artifacts -----
+.DS_Store
+.AppleDouble
+.LSOverride
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/

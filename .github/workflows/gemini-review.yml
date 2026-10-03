@@ -1,0 +1,101 @@
+name: Gemini diff review (decorrelated second reviewer)
+
+# DATA BOUNDARY. Read this before changing a single step below.
+#
+# This workflow sends the PULL REQUEST DIFF and nothing else to the Gemini
+# Developer API. It never sends a repository checkout, a file tree, or the
+# content of any file the pull request did not touch. That is not a performance
+# choice, it is a rights and privacy constraint: Gemini Free Tier terms permit
+# Google to use submitted content to improve its products, so employer or
+# customer code, recruiting material, credentials, and PII must never go
+# through this reviewer.
+#
+# The checkout below is therefore deliberately NOT given to the model. It exists
+# only so the runner has tools/review/gemini_diff_review.py to execute; the
+# script's own `looks_like_diff` guard refuses any input that is not a unified
+# diff, so a future edit that tries to pass a file tree fails instead of leaking.
+#
+# WHY A SECOND REVIEWER AT ALL: value comes from information asymmetry, not
+# from more opinions. Gemini is a different model family from any primary
+# reviewer and sees a deliberately smaller context (the diff only).
+#
+# This job is ADVISORY. It cannot approve, request changes, or block a merge.
+# Findings surface as annotations on the diff. If GEMINI_API_KEY is not set,
+# the job skips with a warning instead of failing.
+
+on:
+  pull_request:
+    types: [opened, synchronize, ready_for_review, reopened]
+
+concurrency:
+  group: gemini-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  gemini-review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify the secret is present before doing anything else
+        id: secret
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # Presence only. A value is never echoed, never written to a file, and
+          # never passed on a command line where `ps` would show it.
+          if [ -z "${GEMINI_API_KEY}" ]; then
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::warning title=gemini-review skipped::GEMINI_API_KEY is not set for this repository; the second reviewer did not run."
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build the pull request diff
+        if: ${{ steps.secret.outputs.present == 'true' }}
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.pull_request.base.sha }}"
+          HEAD="${{ github.event.pull_request.head.sha }}"
+          # Excludes enforce the data boundary at the source. The ':(exclude)'
+          # pathspecs are why this is a diff command and not `gh pr diff`,
+          # which offers no way to withhold a path.
+          git diff --no-color "${BASE}" "${HEAD}" -- . \
+            ':(exclude)research-papers/**' \
+            ':(exclude)state/**' \
+            > pr.diff
+          echo "diff bytes: $(wc -c < pr.diff)"
+
+      - name: Gemini review
+        if: ${{ steps.secret.outputs.present == 'true' }}
+        env:
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+        run: |
+          # --soft-fail: an unreachable second reviewer degrades this job to a
+          # warning rather than a red check. The degradation is logged, not
+          # silent; it must not be able to block a pull request that the primary
+          # reviewer passed.
+          python tools/review/gemini_diff_review.py review \
+            --diff-file pr.diff \
+            --json-out gemini-findings.json \
+            --soft-fail
+
+      - name: Upload findings
+        if: ${{ steps.secret.outputs.present == 'true' && hashFiles('gemini-findings.json') != '' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: gemini-review-findings
+          path: gemini-findings.json
