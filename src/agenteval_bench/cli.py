@@ -562,6 +562,139 @@ def cmd_bugsmith(args: list[str]) -> int:
         return 1
 
 
+def cmd_snapshot(args: list[str]) -> int:
+    """Immutable benchmark snapshots: publish / verify / list / check.
+
+    publish: freeze a YAML suite as a new immutable version. The baseline is
+    a real recorded run (recorded `output` fields, like `run`), pinned into
+    the version manifest for the release gate.
+    """
+    from agenteval_bench.snapshots import SnapshotError, SnapshotStore
+
+    if not args or args[0] in ("--help", "-h"):
+        print("Usage: agenteval-bench snapshot publish --suite <file> --store <dir>")
+        print("                                --version <id> --owner <name> --why <text>")
+        print("                                [--prev <id>] [--changed <text>] [--cadence <text>]")
+        print("                                [--regression-set <text>] [--feedback-loop <text>]")
+        print("                                [--agent <name>] [--seed 42]")
+        print("       agenteval-bench snapshot verify --store <dir> --suite <name> --version <id>")
+        print("       agenteval-bench snapshot list --store <dir> [--suite <name>]")
+        print("       agenteval-bench snapshot check --store <dir>")
+        return 0
+
+    sub, rest = args[0], args[1:]
+    if sub == "publish":
+        return _snapshot_publish(rest)
+    if sub == "verify":
+        rest, store_s = _flag(rest, "--store")
+        rest, suite_name = _flag(rest, "--suite")
+        rest, version_id = _flag(rest, "--version")
+        if not store_s or not suite_name or not version_id:
+            print("Error: verify needs --store <dir> --suite <name> --version <id>",
+                  file=sys.stderr)
+            return 2
+        try:
+            SnapshotStore(store_s).verify(suite_name, version_id)
+        except SnapshotError as e:
+            print(f"CORRUPTED: {e}", file=sys.stderr)
+            return 1
+        print(f"OK: {suite_name}/{version_id} hash-verified")
+        return 0
+    if sub == "list":
+        rest, store_s = _flag(rest, "--store")
+        rest, suite_name = _flag(rest, "--suite")
+        if not store_s:
+            print("Error: list needs --store <dir>", file=sys.stderr)
+            return 2
+        store = SnapshotStore(store_s)
+        if suite_name:
+            for v in store.list_versions(suite_name):
+                print(f"{suite_name}/{v}")
+        else:
+            root = store.root
+            if root.is_dir():
+                for sdir in sorted(p for p in root.iterdir()
+                                   if p.is_dir() and not p.name.startswith(".")):
+                    for v in store.list_versions(sdir.name):
+                        print(f"{sdir.name}/{v}")
+        return 0
+    if sub == "check":
+        rest, store_s = _flag(rest, "--store")
+        if not store_s:
+            print("Error: check needs --store <dir>", file=sys.stderr)
+            return 2
+        problems = SnapshotStore(store_s).verify_all()
+        if problems:
+            print(f"CORRUPTED: {len(problems)} version(s) failed verification:")
+            for p in problems:
+                print(f"  - {p}")
+            return 1
+        print("OK: all published versions hash-verified")
+        return 0
+    print(f"Error: unknown snapshot subcommand: {sub}", file=sys.stderr)
+    return 2
+
+
+def _snapshot_publish(args: list[str]) -> int:
+    from agenteval_bench.snapshots import (
+        SnapshotError,
+        SnapshotStore,
+        VersionMeta,
+        baseline_from_run,
+    )
+
+    args, suite_path = _flag(args, "--suite")
+    args, store_s = _flag(args, "--store")
+    args, version_id = _flag(args, "--version")
+    args, owner = _flag(args, "--owner")
+    args, why = _flag(args, "--why")
+    args, prev = _flag(args, "--prev")
+    args, changed = _flag(args, "--changed", "")
+    args, cadence = _flag(args, "--cadence", "")
+    args, regset = _flag(args, "--regression-set", "")
+    args, feedback = _flag(args, "--feedback-loop", "")
+    args, agent = _flag(args, "--agent", "recorded")
+    args, seed_s = _flag(args, "--seed", str(DEFAULT_SEED))
+
+    missing = [n for n, v in (("--suite", suite_path), ("--store", store_s),
+                              ("--version", version_id), ("--owner", owner),
+                              ("--why", why)) if not v]
+    if missing:
+        print(f"Error: snapshot publish needs {' '.join(missing)}", file=sys.stderr)
+        return 2
+    try:
+        seed = int(seed_s or str(DEFAULT_SEED))
+    except ValueError:
+        print(f"Error: --seed must be an integer, got {seed_s}", file=sys.stderr)
+        return 2
+
+    try:
+        suite, recorded, _missing, _digest = _load_suite_for_replay(suite_path)
+        result, _outputs = _run_suite(suite, recorded, seed)
+        baseline = baseline_from_run(result, seed=seed, agent=agent or "recorded")
+        version = SnapshotStore(store_s).publish(
+            suite,
+            version_id,
+            VersionMeta(
+                owner=owner or "",
+                why=why or "",
+                changed_from_prev=changed or "",
+                cadence=cadence or "",
+                regression_set=regset or "",
+                feedback_loop=feedback or "",
+            ),
+            baseline,
+            prev_version_id=prev,
+        )
+    except SnapshotError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(f"Published {suite.name}/{version.version_id} digest={version.digest}")
+    print(f"Baseline: pass_rate {version.baseline.pass_rate:.1%} "
+          f"(agent={version.baseline.agent}, seed={seed})")
+    return 0
+
+
 def main() -> None:
     """Minimal CLI — full argparse/typer in v0.2."""
     args = sys.argv[1:]
@@ -579,6 +712,9 @@ def main() -> None:
         print("       agenteval-bench bugsmith --repo <dir> --out <dir> [--procedural 8]")
         print("                                [--seed 42] [--local] [--config curation.json]")
         print("                                [--pr-mirror patch:pr-ref]")
+        print("       agenteval-bench snapshot publish --suite <file> --store <dir>")
+        print("                                --version <id> --owner <name> --why <text>")
+        print("       agenteval-bench snapshot verify --store <dir> --suite <name> --version <id>")
         print("       (--seed is recorded for provenance; the test itself is deterministic)")
         return
 
@@ -595,6 +731,8 @@ def main() -> None:
         sys.exit(cmd_simpson(rest))
     elif cmd == "bugsmith":
         sys.exit(cmd_bugsmith(rest))
+    elif cmd == "snapshot":
+        sys.exit(cmd_snapshot(rest))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
