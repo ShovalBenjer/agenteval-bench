@@ -123,7 +123,9 @@ def test_simpson_cli_out_of_range_tolerance_exits_2(monkeypatch, capsys):
 
 
 def test_simpson_cli_tolerance_flag_beats_doc_field(monkeypatch, capsys):
-    # Doc field says 1.0 (invalid -> would be exit 2); the flag wins.
+    # Doc field says 1.0 (in-range, suppresses ALLOCATION_SHIFT); the flag
+    # wins: with the flag's 0.05 the shift is named. Asserting the shift
+    # violation pins precedence — both orders exit 1 on the reversal.
     doc = dict(KOHAVI_SLICES, allocation_tolerance=1.0)
     path = _write(doc)
     try:
@@ -132,7 +134,27 @@ def test_simpson_cli_tolerance_flag_beats_doc_field(monkeypatch, capsys):
             monkeypatch,
             capsys,
         )
-        assert code == 1  # flag used: reversal still refused, not exit 2
+        assert code == 1
+        assert "ALLOCATION_SHIFT" in out
         assert "SIMPSON_REVERSAL" in out
     finally:
         os.unlink(path)
+
+
+def test_simpson_cli_empty_or_duplicate_strata_exit_2(monkeypatch, capsys):
+    # Seam contract errors are unusable input (exit 2), not a refused
+    # claim (exit 1): no traceback, no conflated exit code.
+    for doc in (
+        dict(KOHAVI_SLICES, strata=[]),
+        dict(
+            KOHAVI_SLICES,
+            strata=[KOHAVI_SLICES["strata"][0], KOHAVI_SLICES["strata"][0]],
+        ),
+    ):
+        path = _write(doc)
+        try:
+            code, _, err = _run(["simpson", "--slices", path], monkeypatch, capsys)
+            assert code == 2, doc
+            assert "invalid slices doc" in err
+        finally:
+            os.unlink(path)

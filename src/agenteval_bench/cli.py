@@ -285,9 +285,15 @@ def cmd_simpson(args: list[str]) -> int:
         print(f"Error: pooled arm totals required: {e}", file=sys.stderr)
         return 2
 
-    verdict = win_claim(
-        strata, pooled_n_treated, pooled_n_control, allocation_tolerance=tolerance
-    )
+    try:
+        verdict = win_claim(
+            strata, pooled_n_treated, pooled_n_control, allocation_tolerance=tolerance
+        )
+    except ValueError as e:
+        # Seam contract errors (empty strata, duplicate names): the slices
+        # doc is unusable input (exit 2), never a refused claim (exit 1).
+        print(f"Error: invalid slices doc: {e}", file=sys.stderr)
+        return 2
     rep = verdict.report
     lines = ["per-stratum disaggregation (mandatory):"]
     for r in rep.strata:
