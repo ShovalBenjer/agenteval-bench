@@ -19,10 +19,11 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 ROADMAP: Path = REPO_ROOT / "TODO.md"
 SPEC: Path = REPO_ROOT / "docs" / "spec.md"
 
-# "- [ ] Title *(v0.2)* — spec: Anchor text". The anchor is the first-column
-# text of the corresponding feature row in docs/spec.md (backticks ignored).
+# "- [ ] Title *(v0.2)* — spec: Anchor text" (`-` or `*` marker). The anchor is
+# the first-column text of the corresponding feature row in docs/spec.md
+# (backticks ignored).
 WORKSTREAM_RE: re.Pattern[str] = re.compile(
-    r"^-\s+\[[ xX]\]\s+(?P<title>.+?)\s+—\s+spec:\s*(?P<anchor>.+?)\s*$"
+    r"^\s*[-*]\s+\[[ xX]\]\s+(?P<title>.+?)\s+—\s+spec:\s*(?P<anchor>.+?)\s*$"
 )
 BULLET_RE: re.Pattern[str] = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s+\S")
 TICKED_RE: re.Pattern[str] = re.compile(r"^\s*[-*]\s+\[[xX]\]")
@@ -71,7 +72,7 @@ def _feature_table_rows() -> set[str]:
         if len(cells) < 2:
             in_feature_table = False
             continue
-        if {"Feature", "Status"} <= {_norm(c) for c in cells}:
+        if {"Feature", "Status", "Est. milestone"} <= {_norm(c) for c in cells}:
             in_feature_table = True  # header fingerprint row
             continue
         if set(cells[0]) <= {"-", ":"}:
