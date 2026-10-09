@@ -216,7 +216,7 @@ def cmd_alt_test(args: list[str]) -> int:
         )
     try:
         report = run_alt_test(items, config, input_digest=dataset_digest(items))
-    except (ValueError, InsufficientCoverage) as e:
+    except (OSError, ValueError, TypeError, InsufficientCoverage) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
     print(render_text(report))
