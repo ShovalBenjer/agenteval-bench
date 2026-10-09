@@ -95,6 +95,15 @@ def demo_cuped() -> tuple[float, float]:
     return res.variance_ratio, res.adjusted_diff - delta
 
 
+def _cuped_result(seed: int, n_per_arm: int):
+    rng = random.Random(seed)
+    xc = [rng.gauss(0.0, 1.0) for _ in range(n_per_arm)]
+    xt = [rng.gauss(0.0, 1.0) for _ in range(n_per_arm)]
+    yc = [2.0 * x + rng.gauss(0.0, 1.0) for x in xc]
+    yt = [0.2 + 2.0 * x + rng.gauss(0.0, 1.0) for x in xt]
+    return cuped_adjust(yc, yt, xc, xt, CovariateSpec("pre_spend", "pre_experiment"))
+
+
 def demo_drills(registry: str, digest: str, plan: ExperimentPlan) -> list[str]:
     """Every refusal the issue demands; each must fire. Returns drill names."""
     fired: list[str] = []
@@ -163,6 +172,18 @@ def demo_drills(registry: str, digest: str, plan: ExperimentPlan) -> list[str]:
         check_experiment(digest, registry, ev)
     except ExperimentViolation:
         fired.append("check-raises-for-ci")
+
+    # Early stop without a reject: the stopping look accepted, so quitting
+    # is peeking-and-quitting, not a stopping rule.
+    ev = ExperimentEvidence(
+        n_final=400,  # n_planned * 0.5, within tolerance
+        looks=(LookEvidence(0.5, 0.2, False),),
+        cuped=_cuped_result(SEED + 3, 200),
+        stopped_at=0.5,
+    )
+    bad = verify_experiment(digest, registry, ev)
+    if not bad.valid and "EARLY_STOP_WITHOUT_REJECT" in bad.violations:
+        fired.append("early-stop-without-reject-named")
     return fired
 
 
@@ -192,10 +213,10 @@ def main() -> int:
         assert abs(bias) < 0.06, f"CUPED should stay unbiased, got bias {bias}"
 
         fired = demo_drills(registry, digest, plan)
-        print(f"violation drills fired ({len(fired)}/9):")
+        print(f"violation drills fired ({len(fired)}/10):")
         for name in fired:
             print(f"  - {name}")
-        assert len(fired) == 9, f"expected 9 drills to fire, got {fired}"
+        assert len(fired) == 10, f"expected 10 drills to fire, got {fired}"
 
         # The compliant path: correct evidence verifies clean.
         gate = SequentialGate(plan)
@@ -220,6 +241,20 @@ def main() -> int:
         verdict = check_experiment(digest, registry, evidence)
         assert verdict.valid
         print("compliant experiment verifies clean: OK")
+
+        # The early-stop path: a real interim reject ends the experiment.
+        gate = SequentialGate(plan)
+        stop_decision = gate.look(0.5, 8.0)  # clears any OF boundary
+        assert stop_decision.reject
+        stop_evidence = ExperimentEvidence(
+            n_final=N_PER_ARM,  # n_planned * 0.5
+            looks=(LookEvidence(0.5, 8.0, True),),
+            cuped=_cuped_result(SEED + 4, N_PER_ARM // 2),
+            stopped_at=0.5,
+        )
+        stop_verdict = check_experiment(digest, registry, stop_evidence)
+        assert stop_verdict.valid
+        print("early stop on interim reject verifies clean: OK")
     print("demo: all expectations hold")
     return 0
 

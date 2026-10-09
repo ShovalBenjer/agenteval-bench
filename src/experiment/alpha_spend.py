@@ -16,7 +16,7 @@ function keeps its two-sided form even for one-sided tests; the
 one-sided/two-sided choice enters only in the boundary solve (upper tail
 vs two tails). Hence one-sided alpha=0.025 reproduces the tabulated K=2
 boundaries ~(2.96, 1.97) (secondary-only oracle), while two-sided
-alpha=0.05 gives ~(2.77, ~2.01). Both control their nominal level; the
+alpha=0.05 gives ~(2.77, ~1.97). Both control their nominal level; the
 difference is the tested hypothesis, not correctness.
 
 All functions are pure and deterministic.

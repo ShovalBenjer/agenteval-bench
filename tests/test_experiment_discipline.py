@@ -379,3 +379,103 @@ class TestRegistrationSeam:
             digest, registry, ExperimentEvidence(n_final=800, looks=())
         )
         assert not bad.valid and bad.violations == ("UNREGISTERED_PLAN",)
+
+    def test_truncated_registry_named_not_raised(self, registry):
+        plan = _plan()
+        digest = register_plan(plan, registry)
+        with open(registry, "w", encoding="utf-8") as f:
+            f.write('{"digest": "abc", "plan": {"name":\n')  # truncated JSON
+        bad = verify_experiment(
+            digest, registry, ExperimentEvidence(n_final=800, looks=())
+        )
+        assert not bad.valid and bad.violations == ("REGISTRY_UNREADABLE",)
+
+    def test_cuped_coverage_mismatch_named(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _evidence(plan, digest, registry)
+        # CUPED computed on a different sample than the experiment's n.
+        rng = random.Random(99)
+        xc = [rng.gauss(0, 1) for _ in range(50)]
+        xt = [rng.gauss(0, 1) for _ in range(50)]
+        yc = [x + rng.gauss(0, 1) for x in xc]
+        yt = [x + rng.gauss(0, 1) for x in xt]
+        wrong = cuped_adjust(yc, yt, xc, xt, PRE)
+        ev = ExperimentEvidence(n_final=ev.n_final, looks=ev.looks, cuped=wrong)
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "CUPED_COVERAGE_MISMATCH" in bad.violations
+
+
+def _early_stop_evidence(plan: ExperimentPlan, z: float, claimed: bool):
+    rng = random.Random(31)
+    n_arm = plan.n_planned // 4  # n_final = n_planned * 0.5 -> half per arm
+    xc = [rng.gauss(0, 1) for _ in range(n_arm)]
+    xt = [rng.gauss(0, 1) for _ in range(n_arm)]
+    yc = [2.0 * x + rng.gauss(0, 1) for x in xc]
+    yt = [0.2 + 2.0 * x + rng.gauss(0, 1) for x in xt]
+    cuped = cuped_adjust(yc, yt, xc, xt, PRE)
+    return ExperimentEvidence(
+        n_final=plan.n_planned // 2,
+        looks=(LookEvidence(0.5, z, claimed),),
+        cuped=cuped,
+        stopped_at=0.5,
+    )
+
+
+class TestEarlyStopping:
+    def test_early_stop_on_reject_verifies_clean(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        gate = SequentialGate(plan)
+        assert gate.look(0.5, 8.0).reject  # really rejects
+        ev = _early_stop_evidence(plan, z=8.0, claimed=True)
+        assert verify_experiment(digest, registry, ev).valid
+
+    def test_early_stop_without_reject_named(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _early_stop_evidence(plan, z=0.2, claimed=False)
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "EARLY_STOP_WITHOUT_REJECT" in bad.violations
+
+    def test_early_stop_fabricated_reject_caught(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _early_stop_evidence(plan, z=0.2, claimed=True)  # claims reject, z says no
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "DECISION_MISMATCH" in bad.violations
+
+    def test_early_stop_wrong_n_named(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _early_stop_evidence(plan, z=8.0, claimed=True)
+        ev = ExperimentEvidence(
+            n_final=plan.n_planned, looks=ev.looks, cuped=ev.cuped,
+            stopped_at=0.5,
+        )  # ran to full n but claims early stop
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "SAMPLE_DEVIATION" in bad.violations
+
+    def test_early_stop_with_extra_look_named(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _early_stop_evidence(plan, z=8.0, claimed=True)
+        ev = ExperimentEvidence(
+            n_final=ev.n_final,
+            looks=ev.looks + (LookEvidence(1.0, 0.1, False),),
+            cuped=ev.cuped,
+            stopped_at=0.5,
+        )
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "LOOK_SCHEDULE_MISMATCH" in bad.violations
+
+    def test_early_stop_unregistered_fraction(self, registry):
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _early_stop_evidence(plan, z=8.0, claimed=True)
+        ev = ExperimentEvidence(
+            n_final=ev.n_final, looks=ev.looks, cuped=ev.cuped,
+            stopped_at=0.37,
+        )
+        bad = verify_experiment(digest, registry, ev)
+        assert not bad.valid and "UNREGISTERED_PEEK" in bad.violations

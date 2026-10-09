@@ -12,12 +12,20 @@ as SAMPLE_DEVIATION, and a missing CUPED adjustment as CUPED_REQUIRED.
 check_experiment raises ExperimentViolation on any violation: wire it
 into CI and violations fail the build. That is the "violations fail CI"
 acceptance criterion of #32, enforced by a running check, not prose.
+
+Early stopping is a first-class compliant path: evidence may declare
+stopped_at, the information fraction where the experiment stopped after
+an interim reject. Verification then checks the looks exactly through
+the stopping look, re-derives the reject from z, and checks n_final
+against n_planned * stopped_at. Stopping early without a reject is
+refused as EARLY_STOP_WITHOUT_REJECT.
 """
 
 from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -46,11 +54,19 @@ class LookEvidence:
 
 @dataclass(frozen=True)
 class ExperimentEvidence:
-    """Everything the experiment reports at the end."""
+    """Everything the experiment reports at the end.
+
+    stopped_at: information fraction where the experiment stopped early
+    following an interim reject. None means the experiment ran the full
+    schedule. An early stop is compliant ONLY if the stopping look really
+    rejected (re-derived from z, not just claimed) — stopping early
+    without a reject is EARLY_STOP_WITHOUT_REJECT.
+    """
 
     n_final: int
     looks: tuple[LookEvidence, ...]
     cuped: CupedResult | None = None
+    stopped_at: float | None = None
 
 
 @dataclass(frozen=True)
@@ -109,6 +125,9 @@ def _read_records(registry_path: str) -> list[dict]:
 
 def register_plan(plan: ExperimentPlan, registry_path: str) -> str:
     """Append a plan to the hash-chained registry; return its digest."""
+    parent = os.path.dirname(registry_path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
     records = _read_records(registry_path)
     prev = records[-1]["digest"] if records else "GENESIS"
     canonical = _canonical_plan(plan)
@@ -153,7 +172,10 @@ def verify_experiment(
     """Verify reported evidence against its pre-registered plan.
 
     Never raises on violations — it names them. Use check_experiment for
-    the raising (CI-gating) form.
+    the raising (CI-gating) form. An early stop (stopped_at set) is
+    compliant only when the stopping look really rejected: the whole
+    point of the spending schedule is that a valid interim reject ends
+    the experiment.
     """
     try:
         plan = load_plan(plan_digest, registry_path)
@@ -164,30 +186,30 @@ def verify_experiment(
             notes=(),
             plan_digest=plan_digest,
         )
+    except (json.JSONDecodeError, OSError) as e:
+        return ExperimentVerdict(
+            valid=False,
+            violations=("REGISTRY_UNREADABLE",),
+            notes=(f"{type(e).__name__}: {e}",),
+            plan_digest=plan_digest,
+        )
     violations: list[str] = []
     notes: list[str] = []
-    lo = plan.n_planned * (1.0 - plan.n_tolerance)
-    hi = plan.n_planned * (1.0 + plan.n_tolerance)
-    if not lo <= evidence.n_final <= hi:
-        violations.append("SAMPLE_DEVIATION")
     # Replay every reported look through a fresh gate: the gate refuses
     # off-schedule peeks, and re-deriving reject/accept from z catches
     # fabricated decision flags.
     gate = SequentialGate(plan)
-    if len(evidence.looks) != len(plan.looks):
-        violations.append("LOOK_SCHEDULE_MISMATCH")
+    if evidence.stopped_at is not None:
+        _verify_early_stop(plan, gate, evidence, violations)
     else:
-        for ev in evidence.looks:
-            try:
-                decision = gate.look(ev.fraction, ev.z)
-            except PeekRefused:
-                violations.append("UNREGISTERED_PEEK")
-                break
-            if decision.reject != ev.rejected:
-                violations.append("DECISION_MISMATCH")
-                break
+        _verify_full_schedule(plan, gate, evidence, violations)
     if plan.covariate is not None and evidence.cuped is None:
         violations.append("CUPED_REQUIRED")
+    if (
+        evidence.cuped is not None
+        and evidence.cuped.n_control + evidence.cuped.n_treated != evidence.n_final
+    ):
+        violations.append("CUPED_COVERAGE_MISMATCH")
     if plan.covariate is None and evidence.cuped is not None:
         notes.append("cuped supplied without a planned covariate: advisory only")
     return ExperimentVerdict(
@@ -196,6 +218,65 @@ def verify_experiment(
         notes=tuple(notes),
         plan_digest=plan_digest,
     )
+
+
+def _n_within(plan: ExperimentPlan, n_final: int, expected: int) -> bool:
+    lo = expected * (1.0 - plan.n_tolerance)
+    hi = expected * (1.0 + plan.n_tolerance)
+    return lo <= n_final <= hi
+
+
+def _replay_looks(
+    gate: SequentialGate, looks: tuple[LookEvidence, ...], violations: list[str]
+) -> bool:
+    """Replay looks through the gate; True if all replayed cleanly."""
+    for ev in looks:
+        try:
+            decision = gate.look(ev.fraction, ev.z)
+        except PeekRefused:
+            violations.append("UNREGISTERED_PEEK")
+            return False
+        if decision.reject != ev.rejected:
+            violations.append("DECISION_MISMATCH")
+            return False
+    return True
+
+
+def _verify_full_schedule(
+    plan: ExperimentPlan,
+    gate: SequentialGate,
+    evidence: ExperimentEvidence,
+    violations: list[str],
+) -> None:
+    if not _n_within(plan, evidence.n_final, plan.n_planned):
+        violations.append("SAMPLE_DEVIATION")
+    if len(evidence.looks) != len(plan.looks):
+        violations.append("LOOK_SCHEDULE_MISMATCH")
+    else:
+        _replay_looks(gate, evidence.looks, violations)
+
+
+def _verify_early_stop(
+    plan: ExperimentPlan,
+    gate: SequentialGate,
+    evidence: ExperimentEvidence,
+    violations: list[str],
+) -> None:
+    stop = evidence.stopped_at
+    assert stop is not None
+    if stop not in plan.looks:
+        violations.append("UNREGISTERED_PEEK")
+        return
+    expected_looks = plan.looks[: plan.looks.index(stop) + 1]
+    if tuple(ev.fraction for ev in evidence.looks) != expected_looks:
+        violations.append("LOOK_SCHEDULE_MISMATCH")
+        return
+    if not _n_within(plan, evidence.n_final, round(plan.n_planned * stop)):
+        violations.append("SAMPLE_DEVIATION")
+    # The stopping look must really have rejected: stopping early on
+    # an accept is not a stopping rule, it is peeking and quitting.
+    if _replay_looks(gate, evidence.looks, violations) and not evidence.looks[-1].rejected:
+        violations.append("EARLY_STOP_WITHOUT_REJECT")
 
 
 def check_experiment(

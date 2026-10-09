@@ -11,8 +11,11 @@ fail-closed so CI can gate on them.
 Enforcement boundary (stated honestly): discipline is enforced at the
 `registry.verify_experiment` / `registry.check_experiment` seam, which
 replays evidence through a fresh `SequentialGate` and re-derives every
-decision. The pure math helpers (`alpha_spend`, `cuped`) stay directly
-callable — tests pin the seam, and the seam is what CI runs.
+decision. The pure math helpers (`obrien_fleming_spend`,
+`group_sequential_boundaries`, `cuped_adjust`) stay directly callable —
+tests pin the seam, and the seam is what CI runs. The verifier is a
+consistency checker over reported evidence (fractions vs plan, decisions
+vs reported z's, arm n's vs n_final); it does not see raw data.
 """
 
 from __future__ import annotations
