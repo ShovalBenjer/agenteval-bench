@@ -94,11 +94,11 @@ your real agent. See [`docs/spec.md`](docs/spec.md) for the full data-flow contr
   (`--ci --threshold`).
 - **Golden replay suites** — commit recorded outputs and guard regressions in CI.
 - **Extensible scoring** — bring your own matcher via `DeterministicScorer`-style
+  interfaces (LLM-as-judge *planned*, see [Roadmap](#changelog) / `docs/archive`).
 - **Novelty Oracle** — judges whether a candidate *mechanism* is new **and**
   better, not just correct: behavioral novelty over a canonical battery +
   simulator quality with confidence intervals
   (`python -m novelty_oracle.demo`). Formal spec: `docs/novelty-oracle.md`.
-  interfaces (LLM-as-judge *planned*, see [Roadmap](#changelog) / `docs/archive`).
 
 ## Installation
 
@@ -245,8 +245,8 @@ agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9  # 
 - Open an issue describing the change before large refactors.
 - Keep `ruff` clean; avoid comments unless requested.
 - Add or update tests for any behavior change.
-- PRs are reviewed by CODEOWNERS (see [`CODEOWNERS`](CODEOWNERS)); the Claude Code
-  Review workflow reviews every push to a PR branch.
+- PRs are reviewed by CODEOWNERS (see [`CODEOWNERS`](CODEOWNERS)); the Gemini
+  diff-review workflow reviews every push to a PR branch.
 
 ## Changelog
 
