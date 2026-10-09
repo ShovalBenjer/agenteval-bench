@@ -61,6 +61,7 @@ def apply_hunks(original: list[str], hunk_lines: list[str]) -> list[str]:
     out: list[str] = []
     orig_idx = 0  # 0-based cursor into original
     i = 0
+    no_trailing_newline = False
     while i < len(hunk_lines):
         m = _HUNK_RE.match(hunk_lines[i])
         if not m:
@@ -95,13 +96,19 @@ def apply_hunks(original: list[str], hunk_lines: list[str]) -> list[str]:
                 orig_idx += 1
             elif line.startswith("+"):
                 out.append(line[1:] + "\n")
-            elif line in ("", "\\"):
-                continue
+                no_trailing_newline = False
             elif line.startswith("\\"):
-                continue  # "\ No newline at end of file"
+                # "\ No newline at end of file": the previous added line
+                # keeps no trailing newline instead of gaining one.
+                no_trailing_newline = True
+                continue
+            elif line == "":
+                continue
             else:
                 raise PatchError(f"bad hunk line: {line[:60]!r}")
     out.extend(original[orig_idx:])
+    if no_trailing_newline and out and out[-1].endswith("\n"):
+        out[-1] = out[-1][:-1]
     return out
 
 

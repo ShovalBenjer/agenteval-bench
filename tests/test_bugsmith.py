@@ -242,14 +242,11 @@ def test_validate_collection_error_breaks_everything(tmp_path: Path, monkeypatch
     passed = baseline(FIXTURE, runner, work)
 
     def fake_run(self, work_tree: Path) -> HarnessOutcome:
-        return HarnessOutcome(passed=frozenset(), failed=frozenset(),
-                              collection_error=True)
-
-    def fake_collect(work_tree: Path, r: LocalRunner) -> frozenset[str]:
-        return frozenset()
+        return HarnessOutcome(failed=frozenset(), collection_error=True,
+                              returncode=2)
 
     monkeypatch.setattr(LocalRunner, "run", fake_run)
-    monkeypatch.setattr("bugsmith.harness._collect_node_ids", fake_collect)
+    monkeypatch.setattr(LocalRunner, "collect", lambda self, w: frozenset())
     candidate = ProceduralBugGenerator(7).generate(FIXTURE, 3)[0]
     report = validate(candidate, FIXTURE, runner, work, passed)
     assert report.collection_error
@@ -260,8 +257,8 @@ def test_baseline_requires_green_tree(tmp_path: Path, monkeypatch) -> None:
     work = tmp_path / "w"
 
     def fake_run(self, work_tree: Path) -> HarnessOutcome:
-        return HarnessOutcome(passed=frozenset(), failed=frozenset({"t1"}),
-                              collection_error=False)
+        return HarnessOutcome(failed=frozenset({"t1"}), collection_error=False,
+                              returncode=1)
 
     monkeypatch.setattr(LocalRunner, "run", fake_run)
     with pytest.raises(BugsmithError):
@@ -332,6 +329,10 @@ def test_curation_rejects_invalid_config() -> None:
         CurationConfig(seed=1, fail_to_pass_min=3, fail_to_pass_max=2)
     with pytest.raises(BugsmithError):
         CurationConfig(seed=1, strategy_quota={"nope": 1})
+    with pytest.raises(BugsmithError):
+        CurationConfig(seed=1, strategy_quota={"procedural_ast": 0})
+    with pytest.raises(BugsmithError):
+        CurationConfig(seed=1, strategy_quota={"procedural_ast": -2})
 
 
 def test_to_instance_refuses_unvalidated() -> None:
@@ -356,7 +357,7 @@ def test_dockerfile_is_a_sealed_environment_not_a_repo_snapshot() -> None:
     # The image must not bake in a repo copy: validation bind-mounts the
     # patched tree, and a stale in-image copy could shadow it.
     text = dockerfile_text()
-    assert "pytest" in text
+    assert '"pytest>=8,<10"' in text
     assert "FROM python:3.12-slim" in text
     assert "COPY repo" not in text
     assert "/target" not in text
@@ -486,7 +487,7 @@ def test_docker_run_and_collect_share_pytest_construction(tmp_path, monkeypatch)
     image = h.TargetImage(tag="bugsmith-target:fake", repo_digest="fake")
     runner = h.DockerRunner(image)
     runner.run(tmp_path)
-    h._collect_node_ids(tmp_path, runner)
+    runner.collect(tmp_path)
     assert len(seen) == 2
     for cmd in seen:
         script = cmd[-1]
@@ -495,3 +496,82 @@ def test_docker_run_and_collect_share_pytest_construction(tmp_path, monkeypatch)
         assert "PYTHONDONTWRITEBYTECODE=1" in cmd
     # The two scripts differ only in the pytest args, not the setup.
     assert seen[0][-1].split("python3 -m pytest")[0] == seen[1][-1].split("python3 -m pytest")[0]
+
+
+def test_off_by_one_range_mutates_stop_never_step() -> None:
+    # Regression (implementation review): range(a, b, step) must mutate the
+    # stop bound; touching the step is not an off-by-one fault.
+    from bugsmith.buggen import _collect_sites, _mutate_source
+
+    src = "def f(n):\n    return list(range(0, n, 2))\n"
+    sites = [s for s in _collect_sites(ast.parse(src)) if s.kind is ast.Call]
+    assert len(sites) == 1
+    mutated = _mutate_source(src, sites[0])
+    assert "range(0, n - 1, 2)" in mutated, mutated
+    assert ", 1)" not in mutated  # the step is untouched
+
+
+def test_from_dict_verifies_instance_id() -> None:
+    from bugsmith.types import BenchmarkInstance
+
+    r = _valid_report(BugStrategy.PR_MIRROR, 2, "rt")
+    inst = to_instance(r, "digest123")
+    back = BenchmarkInstance.from_dict(inst.to_dict())
+    assert back == inst
+    tampered = inst.to_dict()
+    tampered["instance_id"] = "forged__id"
+    with pytest.raises(BugsmithError):
+        BenchmarkInstance.from_dict(tampered)
+
+
+def test_instance_id_binds_repo_digest() -> None:
+    r = _valid_report(BugStrategy.PROCEDURAL_AST, 1, "d1")
+    a = to_instance(r, "digest-aaa")
+    b = to_instance(r, "digest-bbb")
+    assert a.instance_id != b.instance_id
+    assert "digest-a"[:8] in a.instance_id
+
+
+def test_baseline_rejects_abnormal_exit_code(tmp_path: Path, monkeypatch) -> None:
+    work = tmp_path / "w"
+
+    def fake_run(self, work_tree: Path) -> HarnessOutcome:
+        return HarnessOutcome(failed=frozenset(), collection_error=False,
+                              returncode=139)
+
+    monkeypatch.setattr(LocalRunner, "run", fake_run)
+    with pytest.raises(BugsmithError):
+        baseline(FIXTURE, LocalRunner(), work)
+
+
+def test_local_runner_prepends_pythonpath(tmp_path: Path, monkeypatch) -> None:
+    import os
+    import subprocess as sp
+
+    import bugsmith.harness as h
+
+    captured: dict[str, str] = {}
+
+    class FakeProc:
+        stdout = ""
+        returncode = 0
+
+    def fake_run(cmd, **kw):
+        captured.update(kw["env"])
+        return FakeProc()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    monkeypatch.setenv("PYTHONPATH", "/existing/entry")
+    h.LocalRunner().run(tmp_path)
+    assert captured["PYTHONPATH"].endswith(f"{os.pathsep}/existing/entry")
+    assert str(tmp_path / "src") in captured["PYTHONPATH"] or str(tmp_path) in captured["PYTHONPATH"]
+
+
+def test_patch_applier_honors_no_trailing_newline(tmp_path: Path) -> None:
+    from bugsmith.patch import apply_hunks
+
+    original = ["line1\n", "line2"]  # no trailing newline
+    hunks = ["@@ -1,2 +1,2 @@", " line1", "-line2", "+line2x", "\\ No newline at end of file"]
+    out = apply_hunks(original, hunks)
+    assert "".join(out) == "line1\nline2x"
+    assert not "".join(out).endswith("\n")

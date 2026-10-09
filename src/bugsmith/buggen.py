@@ -70,12 +70,13 @@ def _flip_boolop(node: ast.BoolOp) -> ast.BoolOp:
 
 
 def _off_by_one_range(node: ast.Call) -> ast.Call:
-    # range(n) -> range(n + 1); range(a, b) -> range(a, b - 1)
+    # range(n) -> range(n + 1); range(a, b[, step]) mutates the STOP bound,
+    # never the step (mutating the step is not an off-by-one fault).
     args = list(node.args)
     if len(args) == 1:
         args[0] = ast.BinOp(left=args[0], op=ast.Add(), right=ast.Constant(value=1))
     elif len(args) >= 2:
-        args[-1] = ast.BinOp(left=args[-1], op=ast.Sub(), right=ast.Constant(value=1))
+        args[1] = ast.BinOp(left=args[1], op=ast.Sub(), right=ast.Constant(value=1))
     else:
         raise BugsmithError("range() with no args")
     return ast.Call(func=node.func, args=args, keywords=node.keywords)

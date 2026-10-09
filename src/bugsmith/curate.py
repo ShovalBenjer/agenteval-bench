@@ -20,7 +20,8 @@ from bugsmith.types import (
 
 
 def _instance_id(report: ValidationReport, repo_digest: str) -> str:
-    return f"{report.candidate.record.strategy.value}__{report.candidate.patch_sha}"
+    return (f"{report.candidate.record.strategy.value}"
+            f"__{repo_digest[:8]}__{report.candidate.patch_sha}")
 
 
 def to_instance(report: ValidationReport, repo_digest: str) -> BenchmarkInstance:

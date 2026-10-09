@@ -470,11 +470,24 @@ def cmd_bugsmith(args: list[str]) -> int:
                     print(f"Error: --pr-mirror needs <patch>:<pr-ref>, got {spec!r}",
                           file=sys.stderr)
                     return 1
-                patch = Path(patch_path).read_text(encoding="utf-8")
+                try:
+                    patch = Path(patch_path).read_text(encoding="utf-8")
+                except OSError as e:
+                    print(f"Error: cannot read --pr-mirror patch {patch_path!r}: {e}",
+                          file=sys.stderr)
+                    return 1
                 candidates.extend(
                     PRMirrorGenerator(pr_ref=pr_ref).generate(patch, ["mirrored"])
                 )
-            reports = [validate(c, repo, runner, work_dir, passed) for c in candidates]
+            reports = []
+            for c in candidates:
+                try:
+                    reports.append(validate(c, repo, runner, work_dir, passed))
+                except BugsmithError as e:
+                    # One bad candidate (e.g. a stale --pr-mirror patch) must
+                    # not discard the good ones.
+                    print(f"Warning: skipping unvalidatable candidate "
+                          f"({c.record.site_description}): {e}", file=sys.stderr)
             valid = [r for r in reports if r.is_valid_instance]
             print(f"validated: {len(valid)}/{len(reports)} instances break >= 1 test")
             subset = select_subset(config, reports, digest)
@@ -523,7 +536,10 @@ def cmd_bugsmith(args: list[str]) -> int:
                 json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
             )
             print(f"wrote {len(subset)} instances + manifest -> {out}")
-            return 0 if valid else 1
+            if not subset:
+                print("No curated instances: nothing to benchmark.", file=sys.stderr)
+                return 1
+            return 0
     except BugsmithError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1

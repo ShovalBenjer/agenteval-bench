@@ -170,8 +170,8 @@ agenteval-bench bugsmith --repo path/to/target --out benchmark/ \
     --procedural 8 --seed 42 --pr-mirror fix.patch:mcalc#41-revert
 ```
 
-Exit `0` with at least one valid instance; `1` when validation finds no
-breaking bug (or on bad input). Add `--local` to run outside Docker
+Exit `0` when the curated benchmark is non-empty; `1` when no instance
+survives validation + curation (or on bad input). Add `--local` to run outside Docker
 (explicit opt-in; CI always uses the Docker path). The manifest records
 every generation input plus the curation config, and
 `all_validated.jsonl` keeps the full validated set so curation stays

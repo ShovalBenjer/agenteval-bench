@@ -29,9 +29,9 @@ _FAILED_RE = re.compile(r"^(FAILED|ERROR) (\S+)")
 
 @dataclass(frozen=True)
 class TestOutcome:
-    passed: frozenset[str]
     failed: frozenset[str]
     collection_error: bool
+    returncode: int
 
 
 def parse_pytest_output(output: str, returncode: int) -> TestOutcome:
@@ -58,14 +58,42 @@ def parse_pytest_output(output: str, returncode: int) -> TestOutcome:
         returncode == 2
         and ("error during collection" in output or "errors during collection" in output)
     )
-    return TestOutcome(passed=frozenset(), failed=frozenset(failed),
-                       collection_error=collection_error)
+    return TestOutcome(failed=frozenset(failed), collection_error=collection_error,
+                       returncode=returncode)
+
+
+# pytest exit codes with a defined meaning for the harness. Anything else
+# (segfault, internal error, timeout kill) is infrastructure failure, never
+# a test result.
+KNOWN_EXIT_CODES = frozenset({0, 1, 2, 5})
 
 
 class Runner(Protocol):
     """Executes the target repo's test suite in a prepared work tree."""
 
     def run(self, work_tree: Path) -> TestOutcome: ...
+
+    def collect(self, work_tree: Path) -> frozenset[str]:
+        """All test node IDs, via --collect-only (independent of pass/fail)."""
+        ...
+
+
+def _parse_collected(output: str) -> frozenset[str]:
+    ids = set()
+    for line in output.splitlines():
+        line = line.strip()
+        if "::" in line and not line.startswith(("=", "<", "ERROR")):
+            ids.add(line.split(" ")[0])
+    return frozenset(ids)
+
+
+def _local_env(work_tree: Path) -> dict[str, str]:
+    env = dict(os.environ)
+    new_path = _pythonpath_for(work_tree)
+    existing = env.get("PYTHONPATH")
+    env["PYTHONPATH"] = f"{new_path}{os.pathsep}{existing}" if existing else new_path
+    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    return env
 
 
 def _pythonpath_for(tree: Path) -> str:
@@ -109,13 +137,10 @@ class LocalRunner:
     """
 
     def run(self, work_tree: Path) -> TestOutcome:
-        env = dict(os.environ)
-        env["PYTHONPATH"] = _pythonpath_for(work_tree)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.run(
             ["python3", "-m", "pytest", *PYTEST_ARGS],
             cwd=str(work_tree),
-            env=env,
+            env=_local_env(work_tree),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=RUN_TIMEOUT_S,
@@ -123,6 +148,19 @@ class LocalRunner:
             text=True,
         )
         return parse_pytest_output(proc.stdout, proc.returncode)
+
+    def collect(self, work_tree: Path) -> frozenset[str]:
+        proc = subprocess.run(
+            ["python3", "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+            cwd=str(work_tree),
+            env=_local_env(work_tree),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=RUN_TIMEOUT_S,
+            check=False,
+            text=True,
+        )
+        return _parse_collected(proc.stdout)
 
 
 class DockerRunner:
@@ -147,30 +185,18 @@ class DockerRunner:
         )
         return parse_pytest_output(proc.stdout, proc.returncode)
 
-
-def _collect_node_ids(work_tree: Path, runner: Runner) -> frozenset[str]:
-    """All test node IDs, via --collect-only -q (independent of pass/fail)."""
-    collect_args = ["--collect-only", "-q", "-p", "no:cacheprovider"]
-    if isinstance(runner, DockerRunner):
-        cmd = _docker_base(runner._image, work_tree) + [
-            "sh", "-c", _container_pytest_script(collect_args)]
-        proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                              timeout=RUN_TIMEOUT_S, check=False, text=True)
-    else:
-        env = dict(os.environ)
-        env["PYTHONPATH"] = _pythonpath_for(work_tree)
-        env["PYTHONDONTWRITEBYTECODE"] = "1"
+    def collect(self, work_tree: Path) -> frozenset[str]:
         proc = subprocess.run(
-            ["python3", "-m", "pytest", *collect_args],
-            cwd=str(work_tree), env=env, stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL, timeout=RUN_TIMEOUT_S, check=False, text=True,
+            _docker_base(self._image, work_tree)
+            + ["sh", "-c", _container_pytest_script(
+                ["--collect-only", "-q", "-p", "no:cacheprovider"])],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=RUN_TIMEOUT_S,
+            check=False,
+            text=True,
         )
-    ids = set()
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if "::" in line and not line.startswith(("=", "<", "ERROR")):
-            ids.add(line.split(" ")[0])
-    return frozenset(ids)
+        return _parse_collected(proc.stdout)
 
 
 def _copy_tree(repo_root: Path, dest: Path) -> None:
@@ -192,8 +218,8 @@ def validate(
     """Validate one candidate: baseline vs patched test outcomes.
 
     ``baseline_passed`` is the clean-tree passing set (computed once per
-    repo digest by :func:`validate_all`). The candidate's patched tree is
-    a throwaway copy; the caller's tree is never mutated.
+    repo digest by :func:`baseline`). The candidate's patched tree is a
+    throwaway copy; the caller's tree is never mutated.
     """
     repo_root = repo_root.resolve()
     digest = repo_digest(repo_root)
@@ -210,13 +236,18 @@ def validate(
         raise BugsmithError(f"candidate patch does not apply: {e}") from e
 
     outcome = runner.run(patched)
+    if outcome.returncode not in KNOWN_EXIT_CODES:
+        raise BugsmithError(
+            f"pytest exited with code {outcome.returncode} on the patched tree: "
+            "infrastructure failure, refusing to score it as a test result"
+        )
     if outcome.collection_error:
         failed_after = frozenset(baseline_passed)  # structural break: everything fails
         passed_after = frozenset()
     else:
         # passed_after = collected - failed. Re-collect on the patched tree
         # so renamed/deleted tests cannot silently vanish from the math.
-        collected = _collect_node_ids(patched, runner)
+        collected = runner.collect(patched)
         failed_after = outcome.failed
         passed_after = collected - failed_after
 
@@ -239,13 +270,18 @@ def baseline(repo_root: Path, runner: Runner, work_dir: Path) -> frozenset[str]:
     clean = work_dir / "runs" / digest / "clean"
     _copy_tree(repo_root, clean)
     outcome = runner.run(clean)
+    if outcome.returncode not in KNOWN_EXIT_CODES:
+        raise BugsmithError(
+            f"pytest exited with code {outcome.returncode} on the clean tree: "
+            "infrastructure failure, refusing to certify a baseline"
+        )
     if outcome.collection_error or outcome.failed:
         raise BugsmithError(
             "clean-tree baseline is not green: the target repo's own suite "
             f"must pass before bug injection (failed={sorted(outcome.failed)}, "
             f"collection_error={outcome.collection_error})"
         )
-    passed = _collect_node_ids(clean, runner)
+    passed = runner.collect(clean)
     if not passed:
         raise BugsmithError("baseline collected zero tests: refusing an empty benchmark")
     cache.parent.mkdir(parents=True, exist_ok=True)

@@ -110,6 +110,17 @@ class BenchmarkInstance:
 
     @staticmethod
     def from_dict(doc: Mapping[str, Any]) -> BenchmarkInstance:
+        import hashlib
+
+        expected = (
+            f"{doc['strategy']}__{doc['repo_digest'][:8]}__"
+            f"{hashlib.sha256(doc['patch'].encode()).hexdigest()[:16]}"
+        )
+        if doc["instance_id"] != expected:
+            raise BugsmithError(
+                f"instance_id {doc['instance_id']!r} does not match its content "
+                f"(expected {expected!r}): refusing a hand-edited instance"
+            )
         record = GenerationRecord(
             strategy=BugStrategy(doc["strategy"]),
             seed=doc["seed"],
@@ -146,8 +157,12 @@ class CurationConfig:
             raise BugsmithError("fail_to_pass_max < fail_to_pass_min")
         if self.max_instances < 1:
             raise BugsmithError("max_instances must be >= 1")
-        for name in self.strategy_quota:
+        for name, quota in self.strategy_quota.items():
             try:
                 BugStrategy(name)
             except ValueError:
                 raise BugsmithError(f"unknown strategy in strategy_quota: {name!r}")
+            if not isinstance(quota, int) or quota < 1:
+                raise BugsmithError(
+                    f"strategy_quota[{name!r}] must be a positive int, got {quota!r}"
+                )

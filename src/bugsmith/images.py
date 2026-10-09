@@ -31,13 +31,28 @@ class TargetImage:
 
 
 def repo_digest(repo_root: Path) -> str:
-    """Content digest of the target repo's Python files. Pins the substrate."""
+    """Content digest of the target repo. Pins the substrate.
+
+    Hashes ``*.py`` files plus the config files that shape the test run
+    (``pyproject.toml``, ``setup.py``/``setup.cfg``, ``requirements*``,
+    ``pytest.ini``, ``tox.ini``): a dependency or config change is a
+    different substrate, even with identical sources.
+    """
     repo_root = repo_root.resolve()
     h = hashlib.sha256()
-    files = sorted(
-        p for p in repo_root.rglob("*.py")
-        if ".git" not in p.parts and "__pycache__" not in p.parts
-    )
+    config_names = {
+        "pyproject.toml", "setup.py", "setup.cfg", "pytest.ini", "tox.ini",
+    }
+
+    def relevant(p: Path) -> bool:
+        rel = p.relative_to(repo_root)
+        if ".git" in rel.parts or "__pycache__" in rel.parts:
+            return False
+        return p.suffix == ".py" or rel.name in config_names or (
+            rel.name.startswith("requirements") and rel.suffix == ".txt"
+        )
+
+    files = sorted(p for p in repo_root.rglob("*") if p.is_file() and relevant(p))
     if not files:
         raise BugsmithError(f"no Python files under {repo_root}")
     for p in files:
@@ -91,7 +106,9 @@ def dockerfile_text(has_dependencies: bool = False) -> str:
     """
     lines = [
         f"FROM {BASE_IMAGE}",
-        "RUN pip install --no-cache-dir pytest",
+        # Bounded pin: the validation environment must not drift silently
+        # under the seed-reproducibility claim.
+        'RUN pip install --no-cache-dir "pytest>=8,<10"',
     ]
     if has_dependencies:
         lines += [
