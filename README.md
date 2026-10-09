@@ -20,6 +20,7 @@
 - [Quickstart](#quickstart)
   - [Python API](#python-api)
   - [CLI golden replay](#cli-golden-replay)
+  - [SWE-smith bug-injection benchmark](#swe-smith-bug-injection-benchmark)
 - [Eval Suite YAML format](#eval-suite-yaml-format)
 - [Scoring strategies](#scoring-strategies)
 - [CI gating](#ci-gating)
@@ -149,6 +150,32 @@ CI gate: pass_rate 100.0% vs threshold 90% -> PASS
 ```
 
 Exit codes: `0` clean / gate passed, `1` bad input, `2` gate failed.
+
+### SWE-smith bug-injection benchmark
+
+Turn a small Python repo (pytest suite; third-party dependencies declared
+in `pyproject.toml` / `requirements*.txt` are installed into the
+validation image) into an executable benchmark via bug injection
+(issue #37): generate bug candidates (seeded procedural AST mutations,
+or reverted-PR mirrors), validate each one **inside Docker** against the
+repo's own test suite, and curate a config-driven subset. Only instances
+that break at least one test survive, each stored with `FAIL_TO_PASS` /
+`PASS_TO_PASS` lists — correctness is defined by the system, never by
+hand-written task lists. Model-rewritten bug injection (LLM strategy) is
+available via the Python API with an explicitly injected rewrite
+backend; the CLI exposes the procedural and PR-mirror strategies.
+
+```bash
+agenteval-bench bugsmith --repo path/to/target --out benchmark/ \
+    --procedural 8 --seed 42 --pr-mirror fix.patch:mcalc#41-revert
+```
+
+Exit `0` when the curated benchmark is non-empty; `1` when no instance
+survives validation + curation (or on bad input). Add `--local` to run outside Docker
+(explicit opt-in; CI always uses the Docker path). The manifest records
+every generation input plus the curation config, and
+`all_validated.jsonl` keeps the full validated set so curation stays
+auditable.
 
 ## Eval Suite YAML format
 

@@ -27,3 +27,5 @@ jobs:
         run: PYTHONPATH=src python -m experiment.demo
       - name: Simpson-safe aggregation demo (reversal must be refused)
         run: PYTHONPATH=src python -m experiment.demo_simpson
+      - name: SWE-smith bug-injection demo (bug-gen -> Docker validation -> curation)
+        run: PYTHONPATH=src python -m bugsmith.demo
