@@ -20,7 +20,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from experiment.alpha_spend import PeekRefused, SequentialGate
 from experiment.cuped import CupedResult
@@ -115,7 +115,7 @@ def register_plan(plan: ExperimentPlan, registry_path: str) -> str:
     digest = _record_digest(prev, canonical)
     record = {
         "digest": digest,
-        "registered_at": datetime.now(timezone.utc).isoformat(),
+        "registered_at": datetime.now(UTC).isoformat(),
         "plan": canonical,
     }
     with open(registry_path, "a", encoding="utf-8") as f:
