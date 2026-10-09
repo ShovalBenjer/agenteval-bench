@@ -284,6 +284,50 @@ def test_spaced_node_ids_survive_live_run(tmp_path: Path) -> None:
     assert plain not in outcome.failed
 
 
+def test_validate_threads_known_ids_for_spaced_tests(tmp_path: Path) -> None:
+    # Pins the validate() -> run(known_ids=...) wiring that the B1 fix
+    # depends on: a candidate breaking a spaced-ID test must land the FULL
+    # re-runnable node ID in fail_to_pass. Deleting known_ids=collected from
+    # validate() makes this fail (the reason contains " - ", so the
+    # best-effort fallback mis-splits the tail).
+    target = tmp_path / "target"
+    (target / "src" / "pkg").mkdir(parents=True)
+    (target / "src" / "pkg" / "__init__.py").write_text(
+        'def val(label):\n    return "ok"\n'
+    )
+    (target / "tests").mkdir(parents=True)
+    (target / "tests" / "__init__.py").write_text("")
+    (target / "tests" / "test_sp.py").write_text(
+        "import pytest\n"
+        "from pkg import val\n\n"
+        "@pytest.mark.parametrize('label', ['a - b', 'plain'])\n"
+        "def test_lab(label):\n"
+        "    assert val(label) == 'ok', label\n"
+    )
+    work = tmp_path / "w"
+    runner = LocalRunner()
+    passed = baseline(target, runner, work)
+    spaced = "tests/test_sp.py::test_lab[a - b]"
+    assert spaced in passed
+    patch = ("--- a/src/pkg/__init__.py\n"
+             "+++ b/src/pkg/__init__.py\n"
+             "@@ -1,2 +1,2 @@\n"
+             '-def val(label):\n'
+             '-    return "ok"\n'
+             '+def val(label):\n'
+             '+    return "ok" if label == "plain" else "bad"\n')
+    candidate = BugCandidate(
+        record=_record(strategy=BugStrategy.PROCEDURAL_AST,
+                       target_file="src/pkg/__init__.py",
+                       site_description="spaced validate threading"),
+        patch=patch,
+    )
+    report = validate(candidate, target, runner, work, passed)
+    assert report.is_valid_instance
+    assert spaced in report.fail_to_pass
+    assert "tests/test_sp.py::test_lab[plain]" in report.pass_to_pass
+
+
 def test_parse_pytest_output_collection_error() -> None:
     out = "==== short test summary info ====\nERROR tests/test_a.py\n" \
           "!!!! Interrupted: 1 error during collection !!!!\n"
