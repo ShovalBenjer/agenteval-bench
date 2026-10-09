@@ -62,10 +62,11 @@ class ExperimentEvidence:
 
     stopped_at: information fraction where the experiment stopped early
     following an interim reject. None means the experiment ran the full
-    schedule (stopped_at=1.0 is equivalent to None). An early stop is
-    compliant ONLY if the stopping look really rejected (re-derived from
-    z, not just claimed) — stopping early without a reject is
-    EARLY_STOP_WITHOUT_REJECT.
+    schedule (stopped_at=1.0 is equivalent to None — pass the literal
+    1.0; an arithmetically derived fraction takes the early-stop path).
+    An early stop is compliant ONLY if the stopping look really rejected
+    (re-derived from z, not just claimed) — stopping early without a
+    reject is EARLY_STOP_WITHOUT_REJECT.
     """
 
     n_final: int
