@@ -107,3 +107,32 @@ def test_simpson_cli_bad_input_exits_2(monkeypatch, capsys):
         os.unlink(path)
     code, _, err = _run(["simpson"], monkeypatch, capsys)
     assert code == 2
+
+
+def test_simpson_cli_out_of_range_tolerance_exits_2(monkeypatch, capsys):
+    # A garbage tolerance is unusable input (exit 2), never confused
+    # with a refused win claim (exit 1).
+    doc = dict(KOHAVI_SLICES, allocation_tolerance=5.0)
+    path = _write(doc)
+    try:
+        code, _, err = _run(["simpson", "--slices", path], monkeypatch, capsys)
+        assert code == 2
+        assert "allocation_tolerance" in err
+    finally:
+        os.unlink(path)
+
+
+def test_simpson_cli_tolerance_flag_beats_doc_field(monkeypatch, capsys):
+    # Doc field says 1.0 (invalid -> would be exit 2); the flag wins.
+    doc = dict(KOHAVI_SLICES, allocation_tolerance=1.0)
+    path = _write(doc)
+    try:
+        code, out, _ = _run(
+            ["simpson", "--slices", path, "--allocation-tolerance", "0.05"],
+            monkeypatch,
+            capsys,
+        )
+        assert code == 1  # flag used: reversal still refused, not exit 2
+        assert "SIMPSON_REVERSAL" in out
+    finally:
+        os.unlink(path)

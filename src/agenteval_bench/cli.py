@@ -271,6 +271,10 @@ def cmd_simpson(args: list[str]) -> int:
             float(tol_s) if tol_s is not None
             else float(doc.get("allocation_tolerance", DEFAULT_ALLOCATION_TOLERANCE))
         )
+        if not 0.0 <= tolerance <= 1.0:
+            raise ValueError(
+                f"allocation_tolerance must be in [0, 1], got {tolerance}"
+            )
     except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
         print(f"Error: invalid slices doc: {e}", file=sys.stderr)
         return 2
@@ -331,8 +335,12 @@ def cmd_simpson(args: list[str]) -> int:
             "pooled_control_rate": rep.pooled_control_rate,
             "pooled_delta": rep.pooled_delta,
         }
-        with open(out, "w", encoding="utf-8") as f:
-            f.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        try:
+            with open(out, "w", encoding="utf-8") as f:
+                f.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        except OSError as e:
+            print(f"Error: cannot write report: {e}", file=sys.stderr)
+            return 2
         print(f"Report: {out}")
     return 0 if verdict.accepted else 1
 
