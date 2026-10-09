@@ -3,6 +3,13 @@
 Historical record of shipped work, retained for traceability. Active planning now
 lives in [`../TODO.md`](../TODO.md).
 
+## v0.1 — Eval Benchmarks (COMPLETE)
+
+- [x] alt-test benchmark: winning-rate leaderboard for LLM judges (#31) —
+      `src/alt_test/` (types, stats, runner, demo), `agenteval-bench alt-test`
+      CLI command, `docs/ALT-TEST.md`, 30-test adversarial suite.
+      Paper: Calderon, Reichart & Dror, arXiv:2501.10970 (CC0; studied, not forked).
+
 ## v0.1 — Core CLI & Scoring (COMPLETE)
 
 - [x] Basic CLI entry point (`agenteval-bench run --suite ...`)
