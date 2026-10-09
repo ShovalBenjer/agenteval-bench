@@ -34,6 +34,8 @@ import json
 import os
 import shutil
 import tempfile
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -392,6 +394,54 @@ class SnapshotStore:
                 "(dot-directories are hidden from listing/verification)"
             )
 
+    # Crash-orphaned claim dirs (SIGKILL between the exclusive mkdir and
+    # the atomic rename) are reclaimed only once stale: the claim->rename
+    # window is two small file writes, so a claim dir older than this is
+    # essentially certainly orphaned, not a concurrent publisher mid-flight.
+    _STALE_CLAIM_SECONDS = 60.0
+
+    def _claim_version_dir(self, suite_name: str, version_id: str) -> Path:
+        """Exclusively claim the version directory for a new publish.
+
+        Returns the claimed (empty, owned) directory. Raises
+        :class:`VersionExistsError` if the id is taken or a live claim is
+        in flight; reclaims a stale crash-orphaned claim dir.
+        """
+        self._suite_dir(suite_name).mkdir(parents=True, exist_ok=True)
+        vdir = self._version_dir(suite_name, version_id)
+        if vdir.exists():
+            if (vdir / "manifest.json").is_file():
+                raise VersionExistsError(
+                    f"version {version_id!r} of suite {suite_name!r} already exists — "
+                    "versions are immutable; publish a new version id instead"
+                )
+            try:
+                empty = not any(vdir.iterdir())
+            except OSError:
+                empty = False
+            if empty:
+                try:
+                    age = time.time() - vdir.stat().st_mtime
+                except OSError:
+                    age = 0.0
+                if age >= self._STALE_CLAIM_SECONDS:
+                    try:
+                        vdir.rmdir()
+                    except OSError:
+                        pass
+                    else:
+                        return self._claim_version_dir(suite_name, version_id)
+            raise VersionExistsError(
+                f"version {version_id!r} of suite {suite_name!r} is already claimed "
+                "(another publish in flight?)"
+            )
+        try:
+            vdir.mkdir(exist_ok=False)
+        except FileExistsError:
+            # Lost the race: recurse once to get the precise reason.
+            return self._claim_version_dir(suite_name, version_id)
+        return vdir
+
     @staticmethod
     def _check_version_id(version_id: str) -> None:
         SnapshotStore._check_path_segment(version_id, "version_id")
@@ -417,12 +467,6 @@ class SnapshotStore:
         """
         self._check_version_id(version_id)
         self._check_path_segment(suite.name, "suite name")
-        vdir = self._version_dir(suite.name, version_id)
-        if vdir.exists():
-            raise VersionExistsError(
-                f"version {version_id!r} of suite {suite.name!r} already exists — "
-                "versions are immutable; publish a new version id instead"
-            )
         if prev_version_id is not None:
             self._check_version_id(prev_version_id)
             if not self._version_dir(suite.name, prev_version_id).exists():
@@ -449,6 +493,32 @@ class SnapshotStore:
                 "(check declared dataclass types, e.g. float weights) — "
                 "refusing to publish an unloadable version"
             )
+        # Same bricking class for the manifest payloads: a type-violating
+        # BaselineRecord/VersionMeta (built by bypassing the typed
+        # constructors) would write a manifest that load() rejects, with the
+        # id already claimed. Round-trip through the validators pre-claim.
+        try:
+            VersionMeta.from_dict(meta.to_dict())
+            BaselineRecord.from_dict(baseline.to_dict())
+        except (SnapshotCorrupted, ValueError, TypeError) as e:
+            raise SnapshotError(
+                f"version metadata/baseline failed pre-publish validation: {e}"
+            ) from e
+        # Structural validation of promotion records (semantic kind
+        # validation lives in regression.PromotionRecord — snapshots must not
+        # import the workflow layer). A garbage dict would otherwise land in
+        # the manifest unchecked.
+        for p in promotions or []:
+            if not isinstance(p, dict):
+                raise SnapshotError(
+                    f"promotion records must be mappings, got {type(p).__name__}"
+                )
+            for key in ("failure_id", "kind", "promoted_case_id"):
+                value = p.get(key)
+                if not isinstance(value, str) or not value:
+                    raise SnapshotError(
+                        f"promotion record missing non-empty {key!r}"
+                    )
         created = created_at or datetime.now(UTC).isoformat()
         manifest: dict[str, Any] = {
             "tool": "agenteval-bench",
@@ -469,11 +539,10 @@ class SnapshotStore:
 
         # Stage in a temp dir inside the suite dir, then atomically rename —
         # a crash mid-publish never leaves a half-written version under its
-        # final id. The version id is claimed EXCLUSIVELY via mkdir before
-        # staging: the exists() check above is a fast path, but the mkdir is
-        # the atomic gate — two concurrent publishers of the same id cannot
-        # both succeed (TOCTOU closed).
-        self._suite_dir(suite.name).mkdir(parents=True, exist_ok=True)
+        # final id. The version id is claimed EXCLUSIVELY via _claim_version_dir
+        # (atomic mkdir gate; stale crash-orphaned claims reclaimed): two
+        # concurrent publishers of the same id cannot both succeed (TOCTOU closed).
+        vdir = self._claim_version_dir(suite.name, version_id)
         # Drop crash-orphaned staging dirs for this version id (a SIGKILL
         # between mkdtemp and os.replace leaves them; they are hidden from
         # listing/verification by design, so clean them here, never silently).
@@ -481,13 +550,6 @@ class SnapshotStore:
         for child in self._suite_dir(suite.name).iterdir():
             if child.is_dir() and child.name.startswith(staging_prefix):
                 shutil.rmtree(child, ignore_errors=True)
-        try:
-            vdir.mkdir(exist_ok=False)
-        except FileExistsError:
-            raise VersionExistsError(
-                f"version {version_id!r} of suite {suite.name!r} already exists — "
-                "versions are immutable; publish a new version id instead"
-            ) from None
         staging = Path(
             tempfile.mkdtemp(prefix=f".{version_id}.", dir=self._suite_dir(suite.name))
         )
@@ -537,25 +599,68 @@ class SnapshotStore:
     def _journal_path(self) -> Path:
         return self.root / "journal.jsonl"
 
-    def _journal_entries(self) -> list[dict[str, Any]]:
+    def _read_journal_lines(self) -> list[str]:
         path = self._journal_path
         if not path.exists():
             return []
+        return path.read_text(encoding="utf-8").splitlines()
+
+    def _journal_entries(self) -> list[dict[str, Any]]:
+        """Parse journal entries.
+
+        A corrupt FINAL line is a torn tail (the single-line append never
+        completed after a crash) and is dropped from reads — the entry it
+        belonged to then counts as missing, which fails closed at load.
+        A corrupt non-final line cannot come from a crashed append (appends
+        only touch the tail), so it is tampering and raises.
+        """
+        lines = [l for l in self._read_journal_lines() if l.strip()]
         entries: list[dict[str, Any]] = []
-        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            line = line.strip()
-            if not line:
-                continue
+        for i, line in enumerate(lines):
+            last = i == len(lines) - 1
             try:
                 entry = json.loads(line)
             except json.JSONDecodeError as e:
+                if last:
+                    continue  # torn tail
                 raise SnapshotCorrupted(
-                    f"journal.jsonl line {lineno} is not valid JSON: {e}"
+                    f"journal.jsonl line {i + 1} is not valid JSON: {e}"
                 ) from e
             if not isinstance(entry, dict):
-                raise SnapshotCorrupted(f"journal.jsonl line {lineno} is not a mapping")
+                if last:
+                    continue  # torn tail
+                raise SnapshotCorrupted(f"journal.jsonl line {i + 1} is not a mapping")
             entries.append(entry)
         return entries
+
+    def _journal_has_torn_tail(self) -> bool:
+        lines = [l for l in self._read_journal_lines() if l.strip()]
+        if not lines:
+            return False
+        try:
+            entry = json.loads(lines[-1])
+        except json.JSONDecodeError:
+            return True
+        return not isinstance(entry, dict)
+
+    def _truncate_torn_tail(self) -> bool:
+        """Physically remove a torn final journal line. Returns True if cut."""
+        lines = self._read_journal_lines()
+        idx = len(lines) - 1
+        while idx >= 0 and not lines[idx].strip():
+            idx -= 1
+        if idx < 0:
+            return False
+        try:
+            json.loads(lines[idx])
+            return False
+        except json.JSONDecodeError:
+            pass
+        kept = lines[:idx]
+        self._journal_path.write_text(
+            "\n".join(kept) + ("\n" if kept else ""), encoding="utf-8"
+        )
+        return True
 
     def _journal_append(
         self,
@@ -566,24 +671,89 @@ class SnapshotStore:
         manifest_digest: str,
         meta_digest: str,
         baseline_digest: str,
+        kind: str = "snapshot-publish",
+        reason: str = "",
+        pre_repair_chain_tip: str | None = None,
     ) -> None:
-        entries = self._journal_entries()
-        prev_chain = entries[-1]["chain"] if entries else JOURNAL_GENESIS
-        entry: dict[str, Any] = {
-            "tool": "agenteval-bench",
-            "kind": "snapshot-publish",
-            "format": SNAPSHOT_FORMAT,
-            "suite_name": suite_name,
-            "version_id": version_id,
-            "digest": digest,
-            "manifest_digest": "sha256:" + manifest_digest,
-            "meta_digest": "sha256:" + meta_digest,
-            "baseline_digest": "sha256:" + baseline_digest,
-            "prev_chain": prev_chain,
-        }
-        entry["chain"] = _sha256_hex(_canonical_json({k: v for k, v in entry.items()}))
-        with open(self._journal_path, "a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, sort_keys=True) + "\n")
+        def build(prev_chain: str) -> dict[str, Any]:
+            entry: dict[str, Any] = {
+                "tool": "agenteval-bench",
+                "kind": kind,
+                "format": SNAPSHOT_FORMAT,
+                "suite_name": suite_name,
+                "version_id": version_id,
+                "digest": digest,
+                "manifest_digest": "sha256:" + manifest_digest,
+                "meta_digest": "sha256:" + meta_digest,
+                "baseline_digest": "sha256:" + baseline_digest,
+                "prev_chain": prev_chain,
+            }
+            if kind != "snapshot-publish":
+                # Repairs are forensic events, not publishes: the operator's
+                # attestation and the chain tip they saw are recorded so a
+                # recovery can never silently manufacture a publish.
+                entry["reason"] = reason
+                entry["pre_repair_chain_tip"] = pre_repair_chain_tip
+            entry["chain"] = _sha256_hex(
+                _canonical_json({k: v for k, v in entry.items()})
+            )
+            return entry
+
+        self._journal_append_locked(build)
+
+    def _journal_append_locked(self, build: Callable[[str], dict[str, Any]]) -> None:
+        """Append one journal entry holding an exclusive lock (POSIX).
+
+        The tail chain is read and the entry appended under the same lock,
+        so two concurrent publishers can never append with the same
+        prev_chain (journal fork). A torn tail (provably incomplete final
+        line from a crashed append) is truncated — it can never become a
+        valid entry. A corrupt non-tail line is tampering: the append is
+        refused rather than extending a compromised journal. Falls back
+        to an unlocked append where fcntl is unavailable.
+        """
+        path = self._journal_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import fcntl
+
+            have_fcntl = True
+        except ImportError:  # pragma: no cover - non-POSIX platforms
+            have_fcntl = False
+        with open(path, "a+", encoding="utf-8") as f:
+            if have_fcntl:
+                fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            try:
+                f.seek(0)
+                lines = [l for l in f.read().splitlines() if l.strip()]
+                clean: list[str] = []
+                for i, raw in enumerate(lines):
+                    try:
+                        json.loads(raw)
+                    except json.JSONDecodeError:
+                        if i == len(lines) - 1:
+                            break  # torn tail: provably incomplete, dropped below
+                        raise SnapshotCorrupted(
+                            "journal.jsonl: corrupt non-tail entry — refusing to "
+                            "extend a tampered journal"
+                        ) from None
+                    clean.append(raw)
+                if len(clean) != len(lines):
+                    f.seek(0)
+                    f.truncate()
+                    if clean:
+                        f.write("\n".join(clean) + "\n")
+                prev_chain = (
+                    json.loads(clean[-1])["chain"] if clean else JOURNAL_GENESIS
+                )
+                entry = build(prev_chain)
+                f.seek(0, 2)
+                f.write(json.dumps(entry, sort_keys=True) + "\n")
+                f.flush()
+                os.fsync(f.fileno())
+            finally:
+                if have_fcntl:
+                    fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
     def _journal_lookup(self, suite_name: str, version_id: str) -> dict[str, Any]:
         matches = [
@@ -595,8 +765,9 @@ class SnapshotStore:
             raise SnapshotCorrupted(
                 f"{suite_name}/{version_id}: no publish journal entry — "
                 "the version directory exists but was never journaled "
-                "(crash between publish and journal append? run "
-                "SnapshotStore.repair_journal() after verifying the version out of band)"
+                "(crash between publish and journal append? verify the version "
+                "out of band, then re-journal with "
+                "`snapshot repair --reason <why-you-trust-it>`)"
             )
         if len(matches) > 1:
             raise SnapshotCorrupted(
@@ -626,20 +797,32 @@ class SnapshotStore:
             prev = entry.get("chain", prev)
         return problems
 
-    def repair_journal(self) -> list[str]:
+    def repair_journal(self, reason: str) -> list[str]:
         """Re-append missing journal entries after full re-verification.
 
         Operator action for crash recovery (publish succeeded but the
         process died before the journal append). Each repaired version is
         fully re-verified (suite bytes vs manifest digest + canonical
-        fixed point) before its entry is appended. Returns the repaired
-        version ids.
+        fixed point) before its entry is appended.
+
+        The repair is journaled as ``snapshot-repair`` — never as a publish —
+        with the operator's ``reason`` (required: the attestation for why
+        this version is trusted) and the chain tip seen before repair, so
+        recovery leaves a forensic trace instead of silently manufacturing
+        a publish. Returns the repaired version ids.
         """
+        if not reason:
+            raise SnapshotError("repair_journal requires a reason (operator attestation)")
+        # Heal a torn tail first: the incomplete line is provably not a
+        # completed entry, so truncating it loses nothing.
+        self._truncate_torn_tail()
         repaired: list[str] = []
         if not self.root.is_dir():
             return repaired
+        entries = self._journal_entries()
+        pre_repair_tip = entries[-1]["chain"] if entries else JOURNAL_GENESIS
         known = {
-            (e.get("suite_name"), e.get("version_id")) for e in self._journal_entries()
+            (e.get("suite_name"), e.get("version_id")) for e in entries
         }
         for sdir in sorted(self.root.iterdir()):
             if not sdir.is_dir() or sdir.name.startswith("."):
@@ -662,7 +845,11 @@ class SnapshotStore:
                     baseline_digest=_sha256_hex(
                         _canonical_json(version.baseline.to_dict())
                     ),
+                    kind="snapshot-repair",
+                    reason=reason,
+                    pre_repair_chain_tip=pre_repair_tip,
                 )
+                pre_repair_tip = self._journal_entries()[-1]["chain"]
                 repaired.append(f"{sdir.name}/{vdir.name}")
         return repaired
 
@@ -674,6 +861,7 @@ class SnapshotStore:
         Returns the version, the suite, and the raw manifest bytes (whose
         hash the journal binds).
         """
+        self._check_path_segment(suite_name, "suite name")
         self._check_version_id(version_id)
         vdir = self._version_dir(suite_name, version_id)
         if not vdir.is_dir():
@@ -765,6 +953,7 @@ class SnapshotStore:
     # -- listing / verification -------------------------------------------
     def list_versions(self, suite_name: str) -> list[str]:
         """Published version ids for a suite, sorted."""
+        self._check_path_segment(suite_name, "suite name")
         sdir = self._suite_dir(suite_name)
         if not sdir.is_dir():
             return []
@@ -786,6 +975,11 @@ class SnapshotStore:
             problems.extend(self._journal_verify_chain())
         except SnapshotError as e:
             problems.append(f"journal.jsonl: {e}")
+        if self._journal_has_torn_tail():
+            problems.append(
+                "journal.jsonl: torn tail line (incomplete append; dropped from reads; "
+                "run `snapshot repair` after out-of-band verification)"
+            )
         for sdir in sorted(self.root.iterdir()):
             if not sdir.is_dir() or sdir.name.startswith("."):
                 continue

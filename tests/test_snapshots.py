@@ -554,8 +554,14 @@ def test_repair_journal_after_crash(tmp_path):
     (tmp_path / "store" / "journal.jsonl").unlink()
     with pytest.raises(SnapshotCorrupted, match="no publish journal entry"):
         store.load("support", "v1")
-    repaired = store.repair_journal()
+    with pytest.raises(SnapshotError, match="reason"):
+        store.repair_journal("")  # attestation required
+    repaired = store.repair_journal("post-crash re-journal after manual verify")
     assert repaired == ["support/v1"]
+    entries = store._journal_entries()
+    assert entries[-1]["kind"] == "snapshot-repair"  # never silently a publish
+    assert entries[-1]["reason"] == "post-crash re-journal after manual verify"
+    assert entries[-1]["pre_repair_chain_tip"] == "GENESIS"
     version, _ = store.load("support", "v1")  # works again, fully re-verified
     assert version.version_id == "v1"
     assert store.verify_all() == []
@@ -568,7 +574,7 @@ def test_repair_journal_refuses_corrupt_version(tmp_path):
     target = tmp_path / "store" / "support" / "v1" / "suite.json"
     target.write_bytes(target.read_bytes() + b" ")
     with pytest.raises(SnapshotCorrupted):
-        store.repair_journal()  # never journals a corrupt version
+        store.repair_journal("attempted recovery")  # never journals a corrupt version
 
 
 # ------------------------------------------------- arch fix-forward: B2, A1, A2, A5, A6
@@ -777,3 +783,134 @@ def test_cli_verify_unknown_version(monkeypatch, capsys, tmp_path):
         monkeypatch, capsys)
     assert code == 1
     assert "CORRUPTED" in err
+
+
+def test_stale_claim_dir_reclaimed(tmp_path):
+    import os
+    import time
+
+    store = SnapshotStore(tmp_path / "store")
+    # Simulate a SIGKILL between claim and rename: empty claim dir, old mtime.
+    vdir = tmp_path / "store" / "support" / "v1"
+    vdir.mkdir(parents=True)
+    old = time.time() - 3600
+    os.utime(vdir, (old, old))
+    version, _ = _publish(store, _suite(), "v1")  # reclaims, does not brick
+    assert version.version_id == "v1"
+    assert store.verify_all() == []
+
+
+def test_fresh_claim_dir_not_reclaimed(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    vdir = tmp_path / "store" / "support" / "v1"
+    vdir.mkdir(parents=True)  # fresh claim: another publish in flight
+    with pytest.raises(VersionExistsError, match="already claimed"):
+        _publish(store, _suite(), "v1")
+
+
+def test_cli_repair_rejournals_with_attestation(monkeypatch, capsys, tmp_path):
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    (tmp_path / "store" / "journal.jsonl").unlink()
+    code, out, _ = _cli_run(
+        ["snapshot", "repair", "--store", store, "--reason", "crash recovery"],
+        monkeypatch, capsys)
+    assert code == 0, out
+    assert "snapshot-repair" in out
+    assert "cli-smoke/v1" in out
+    code, out, _ = _cli_run(["snapshot", "check", "--store", store],
+                            monkeypatch, capsys)
+    assert code == 0, out
+    code, _, err = _cli_run(
+        ["snapshot", "repair", "--store", store], monkeypatch, capsys)
+    assert code == 2  # --reason required
+    assert "--reason" in err
+
+
+# ------------------------------------------------- impl r2: read-path validation, A-a, A-d, A-e, A-f
+
+def test_read_path_rejects_suite_name_traversal(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    with pytest.raises(SnapshotError, match="safe path segment"):
+        store.load("../../etc", "v1")
+    with pytest.raises(SnapshotError, match="safe path segment"):
+        store.list_versions("../../etc")
+    with pytest.raises(SnapshotError, match="safe path segment"):
+        store.verify("../../etc", "v1")
+
+
+def test_cli_show_rejects_suite_name_traversal(monkeypatch, capsys, tmp_path):
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    code, _, err = _cli_run(
+        ["snapshot", "show", "--store", store, "--suite", "../../etc", "--version", "v1"],
+        monkeypatch, capsys)
+    assert code == 1
+    assert "CORRUPTED" in err or "safe path segment" in err
+
+
+def test_publish_rejects_type_violating_baseline(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    bad_baseline = BaselineRecord(
+        agent="x", seed="42", pass_rate=1.0, total=1,  # type: ignore[arg-type]
+        passed=1, failed=0, skipped=0, per_case={})
+    with pytest.raises(SnapshotError, match="pre-publish validation"):
+        store.publish(_suite(), "v1", _meta(), bad_baseline)
+    assert store.list_versions("support") == []  # id not bricked
+
+
+def test_publish_rejects_garbage_promotion(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    with pytest.raises(SnapshotError, match="promotion record"):
+        store.publish(_suite(), "v1", _meta(), _baseline(),
+                      promotions=[{"kind": "nope"}])  # type: ignore[list-item]
+    assert store.list_versions("support") == []
+
+
+def test_promotion_record_direct_construction_validates_kind():
+    with pytest.raises(ValueError, match="kind must be one of"):
+        PromotionRecord(failure_id="x", kind="nope", promoted_case_id="c",  # type: ignore[arg-type]
+                        prior_score=0.0, evaluator_notes="", promoted_at="")
+
+
+def test_torn_journal_tail_does_not_brick_reads(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    journal = tmp_path / "store" / "journal.jsonl"
+    with open(journal, "a", encoding="utf-8") as f:
+        f.write('{"tool": "agenteval-bench", "kind": "snapshot-pub')  # torn append
+    # Reads still work: the torn tail is dropped.
+    version, _ = store.load("support", "v1")
+    assert version.version_id == "v1"
+    # ...but it is reported, not silent.
+    problems = store.verify_all()
+    assert any("torn tail" in p for p in problems)
+    # A second publish still chains correctly off the last GOOD entry.
+    _publish(store, _suite(), "v2", prev_version_id="v1")
+    entries = store._journal_entries()
+    assert entries[-1]["version_id"] == "v2"
+    assert entries[-1]["prev_chain"] == entries[-2]["chain"]
+
+
+def test_concurrent_publishes_do_not_fork_journal(tmp_path):
+    import threading
+
+    store = SnapshotStore(tmp_path / "store")
+    errors: list = []
+
+    def pub(i: int) -> None:
+        try:
+            _publish(store, _suite(name="conc"), f"v{i}")
+        except Exception as e:  # noqa: BLE001 - collected, asserted empty
+            errors.append(e)
+
+    threads = [threading.Thread(target=pub, args=(i,)) for i in range(8)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert not errors
+    assert len(store.list_versions("conc")) == 8
+    assert store.verify_all() == []
+    entries = store._journal_entries()
+    chains = [e["chain"] for e in entries]
+    assert len(set(chains)) == 8  # every append linked a distinct predecessor

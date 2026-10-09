@@ -80,6 +80,12 @@ class PromotionRecord:
     evaluator_notes: str
     promoted_at: str
 
+    def __post_init__(self) -> None:
+        if self.kind not in _FAILURE_KINDS:
+            raise ValueError(
+                f"kind must be one of {_FAILURE_KINDS}, got {self.kind!r}"
+            )
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "failure_id": self.failure_id,

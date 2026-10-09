@@ -582,6 +582,8 @@ def cmd_snapshot(args: list[str]) -> int:
         print("       agenteval-bench snapshot verify --store <dir> --suite <name> --version <id>")
         print("       agenteval-bench snapshot list --store <dir> [--suite <name>]")
         print("       agenteval-bench snapshot check --store <dir>")
+        print("       agenteval-bench snapshot repair --store <dir> --reason <text>")
+        print("         (re-journal crash-orphaned versions after out-of-band verification)")
         print("       agenteval-bench snapshot compare --store <dir> --suite <name> --version <id>")
         print("                                --candidate-outputs <file.json>")
         print("                                [--candidate-name <name>] [--min-pass-rate <x>]")
@@ -678,6 +680,24 @@ def cmd_snapshot(args: list[str]) -> int:
                 print(f"  - {p}")
             return 1
         print("OK: all published versions hash-verified")
+        return 0
+    if sub == "repair":
+        rest, store_s = _flag(rest, "--store")
+        rest, reason = _flag(rest, "--reason")
+        if not store_s or not reason:
+            print("Error: repair needs --store <dir> --reason <text>", file=sys.stderr)
+            return 2
+        try:
+            repaired = SnapshotStore(store_s).repair_journal(reason)
+        except SnapshotError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if repaired:
+            print(f"Repaired {len(repaired)} version(s) (journaled as snapshot-repair):")
+            for v in repaired:
+                print(f"  - {v}")
+        else:
+            print("Nothing to repair: every published version is journaled.")
         return 0
     print(f"Error: unknown snapshot subcommand: {sub}", file=sys.stderr)
     return 2
@@ -835,10 +855,22 @@ def _snapshot_compare(args: list[str]) -> int:
         return 1
 
     replay_ids = iter([c.id for c in suite.cases if not c.skip])
+    ordered_ids = [c.id for c in suite.cases if not c.skip]
     missing_ids: list[str] = []
+    called_ids: list[str] = []
 
     def candidate_fn(_input: str) -> str:
-        cid = next(replay_ids)
+        # The engine calls the agent fn once per non-skipped case, in case
+        # order (EvalRunner.run contract). Attribution is by call order;
+        # any divergence fails LOUDLY below, never silently misattributed.
+        try:
+            cid = next(replay_ids)
+        except StopIteration:
+            raise SnapshotError(
+                "candidate agent_fn called more times than the frozen suite "
+                "has cases — attribution would be silent misattribution"
+            ) from None
+        called_ids.append(cid)
         if cid not in candidate_outputs:
             missing_ids.append(cid)
             return ""
@@ -859,6 +891,12 @@ def _snapshot_compare(args: list[str]) -> int:
         )
     except SnapshotError as e:
         print(f"CORRUPTED: {e}", file=sys.stderr)
+        return 1
+
+    if called_ids != ordered_ids:
+        print("Error: candidate output attribution mismatch — the engine's agent_fn "
+              "call order diverged from frozen case order; refusing to score.",
+              file=sys.stderr)
         return 1
 
     print(f"Regression gate: {suite_name}/{version_id} "
