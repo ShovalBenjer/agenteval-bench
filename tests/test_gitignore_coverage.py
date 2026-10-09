@@ -2,6 +2,10 @@
 issue #18 must actually be ignored, and tracked source files must NOT be
 silenced by an over-broad pattern. Enforcement is `git check-ignore`,
 not prose.
+
+uv.lock is pinned here although not enumerated in issue #18: it is
+pre-existing in .gitignore (generated per-machine) and this test pins the
+state, it does not expand the issue scope.
 """
 
 from __future__ import annotations
@@ -147,6 +151,7 @@ ARTIFACT_NAME_PATTERNS = [
     "htmlcov",
     ".tox",
     ".nox",
+    ".cache",
     ".hypothesis",
     ".ruff_cache",
     ".mypy_cache",
@@ -166,10 +171,20 @@ ARTIFACT_NAME_PATTERNS = [
     "*.swp",
     "*.swo",
     "*~",
+    ".project",
+    ".classpath",
     ".DS_Store",
+    ".AppleDouble",
+    ".LSOverride",
     "Thumbs.db",
+    "ehthumbs.db",
     "Desktop.ini",
 ]
+
+# Known limitation (documented, not a defect): the tree-observation test only
+# catches artifact names on ARTIFACT_NAME_PATTERNS. A novel artifact name
+# (e.g. benchmark_results.json, output/) passes silently — extending the list
+# is the cost of keeping the check executable rather than hand-wavy.
 
 
 def _untracked_unignored() -> list[str]:
