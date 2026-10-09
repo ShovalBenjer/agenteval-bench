@@ -294,8 +294,8 @@ def cmd_simpson(args: list[str]) -> int:
             f"-> delta {r.delta:+.2%}"
         )
     lines.append(
-        f"pooled: treated {rep.pooled_treated_rate:.2%} vs "
-        f"control {rep.pooled_control_rate:.2%} "
+        f"pooled (descriptive only, not a result): treated {rep.pooled_treated_rate:.2%} "
+        f"vs control {rep.pooled_control_rate:.2%} "
         f"-> delta {rep.pooled_delta:+.2%}"
     )
     if verdict.accepted:

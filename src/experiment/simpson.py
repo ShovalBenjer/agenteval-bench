@@ -24,9 +24,10 @@ in each category or period.
 
 Enforcement boundary (stated honestly): the seam is
 ``check_aggregation`` / ``assert_aggregation`` / ``win_claim`` below.
-There is NO pooled-only path — a win claim can only be constructed from
-strata, so pooled numbers can never be quoted without the disaggregated
-numbers riding alongside them. The pure rate helpers
+There is NO pooled-only path to a *win claim* — a win claim can only be
+constructed from strata, so a win can never be quoted without the
+disaggregated numbers riding alongside it. (The pure `pooled_rates`
+helper remains descriptive-only by design.) The pure rate helpers
 (``stratum_delta``, ``pooled_rates``) stay directly callable; the
 seam functions are what tests pin and CI runs. This module verifies
 reported aggregates; it does not see raw per-user data.

@@ -116,7 +116,9 @@ def demo_drills() -> list[str]:
         fired.append("pooled-only-path-impossible")
 
     # 2. Non-exhaustive decomposition: claimed pooled totals do not match
-    #    the stratum sums — a missing slice cannot hide behind a win.
+    #    the stratum sums — an inconsistent win cannot be claimed.
+    #    (Consistent-but-fabricated totals are outside the seam's reach:
+    #    it verifies reported aggregates, not raw data.)
     a = Stratum("a", 5000, 5000, 115, 101)
     b = Stratum("b", 5000, 5000, 60, 50)
     claim = win_claim((a, b), pooled_n_treated=9999, pooled_n_control=10000)

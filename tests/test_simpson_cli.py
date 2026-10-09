@@ -63,7 +63,7 @@ def test_simpson_cli_rejects_kohavi_reversal(monkeypatch, capsys):
         assert "SIMPSON_REVERSAL" in out
         # Mandatory disaggregation is printed even on the refusal path.
         assert "friday" in out and "saturday" in out
-        assert "pooled:" in out
+        assert "pooled (descriptive only, not a result)" in out
     finally:
         os.unlink(path)
 
