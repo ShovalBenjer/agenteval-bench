@@ -43,6 +43,10 @@ class RegistryCorrupted(ValueError):
     """The plan registry's hash chain does not verify."""
 
 
+class RegistryMalformed(RegistryCorrupted):
+    """A registry record is valid JSON but has the wrong shape."""
+
+
 @dataclass(frozen=True)
 class LookEvidence:
     """Reported interim result: fraction, z-statistic, claimed decision."""
@@ -58,9 +62,10 @@ class ExperimentEvidence:
 
     stopped_at: information fraction where the experiment stopped early
     following an interim reject. None means the experiment ran the full
-    schedule. An early stop is compliant ONLY if the stopping look really
-    rejected (re-derived from z, not just claimed) — stopping early
-    without a reject is EARLY_STOP_WITHOUT_REJECT.
+    schedule (stopped_at=1.0 is equivalent to None). An early stop is
+    compliant ONLY if the stopping look really rejected (re-derived from
+    z, not just claimed) — stopping early without a reject is
+    EARLY_STOP_WITHOUT_REJECT.
     """
 
     n_final: int
@@ -111,14 +116,19 @@ def _read_records(registry_path: str) -> list[dict]:
         return []
     records = [json.loads(line) for line in lines]
     prev = "GENESIS"
-    for rec in records:
-        digest = _record_digest(prev, rec["plan"])
-        if digest != rec["digest"]:
-            raise RegistryCorrupted(
-                f"hash chain broken at plan {rec['plan'].get('name')!r}: "
-                "the registry was rewritten after registration"
-            )
-        prev = digest
+    try:
+        for rec in records:
+            if not isinstance(rec, dict) or not isinstance(rec.get("plan"), dict):
+                raise RegistryMalformed(f"record has wrong shape: {str(rec)[:80]}")
+            digest = _record_digest(prev, rec["plan"])
+            if not isinstance(rec.get("digest"), str) or digest != rec["digest"]:
+                raise RegistryCorrupted(
+                    f"hash chain broken at plan {rec['plan'].get('name')!r}: "
+                    "the registry was rewritten after registration"
+                )
+            prev = digest
+    except (AttributeError, TypeError, KeyError) as e:
+        raise RegistryMalformed(f"malformed registry record: {e}") from e
     return records
 
 
@@ -177,6 +187,13 @@ def verify_experiment(
     """
     try:
         plan = load_plan(plan_digest, registry_path)
+    except RegistryMalformed as e:
+        return ExperimentVerdict(
+            valid=False,
+            violations=("REGISTRY_UNREADABLE",),
+            notes=(f"{type(e).__name__}: {e}",),
+            plan_digest=plan_digest,
+        )
     except (KeyError, RegistryCorrupted):
         return ExperimentVerdict(
             valid=False,
@@ -197,7 +214,9 @@ def verify_experiment(
     # off-schedule peeks, and re-deriving reject/accept from z catches
     # fabricated decision flags.
     gate = SequentialGate(plan)
-    if evidence.stopped_at is not None:
+    # stopped_at=1.0 is the full schedule under another name: the
+    # experiment ran every look, so it takes the full-schedule path.
+    if evidence.stopped_at is not None and evidence.stopped_at != 1.0:
         _verify_early_stop(plan, gate, evidence, violations)
     else:
         _verify_full_schedule(plan, gate, evidence, violations)

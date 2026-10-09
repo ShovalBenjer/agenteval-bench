@@ -417,6 +417,16 @@ class TestRegistrationSeam:
         )
         assert not bad.valid and bad.violations == ("REGISTRY_UNREADABLE",)
 
+    def test_malformed_record_named_not_raised(self, registry):
+        plan = _plan()
+        digest = register_plan(plan, registry)
+        with open(registry, "w", encoding="utf-8") as f:
+            f.write('{"digest": "x", "plan": 42}\n')  # valid JSON, wrong shape
+        bad = verify_experiment(
+            digest, registry, ExperimentEvidence(n_final=800, looks=())
+        )
+        assert not bad.valid and bad.violations == ("REGISTRY_UNREADABLE",)
+
     def test_cuped_coverage_mismatch_named(self, registry):
         plan = _plan(covariate=PRE)
         digest = register_plan(plan, registry)
@@ -506,3 +516,15 @@ class TestEarlyStopping:
         )
         bad = verify_experiment(digest, registry, ev)
         assert not bad.valid and "UNREGISTERED_PEEK" in bad.violations
+
+    def test_stopped_at_one_is_full_schedule(self, registry):
+        # stopped_at=1.0 after running every look is the full schedule,
+        # not an early stop: a completed non-rejecting experiment with
+        # stopped_at=1.0 verifies clean instead of EARLY_STOP_WITHOUT_REJECT.
+        plan = _plan(covariate=PRE)
+        digest = register_plan(plan, registry)
+        ev = _evidence(plan, digest, registry)
+        ev = ExperimentEvidence(
+            n_final=ev.n_final, looks=ev.looks, cuped=ev.cuped, stopped_at=1.0
+        )
+        assert verify_experiment(digest, registry, ev).valid
