@@ -5,9 +5,9 @@ enumerates and resolves them. Adding an Open Workstream bullet without a
 `spec:` anchor fails CI — docs authors, not test authors, own the extension.
 
 Accepted coupling: a `spec:` anchor names a feature-table row's first-column
-text in docs/spec.md. If a spec author rewords that row, the build fails with
-a message naming the bullet and the anchor — the fix is a docs edit, never
-test surgery.
+text in docs/spec.md (the table whose header is Feature|Status|Est. milestone).
+If a spec author rewords that row, the build fails with a message naming the
+bullet and the anchor — the fix is a docs edit, never test surgery.
 """
 
 from __future__ import annotations
@@ -24,7 +24,8 @@ SPEC: Path = REPO_ROOT / "docs" / "spec.md"
 WORKSTREAM_RE: re.Pattern[str] = re.compile(
     r"^-\s+\[[ xX]\]\s+(?P<title>.+?)\s+—\s+spec:\s*(?P<anchor>.+?)\s*$"
 )
-BULLET_RE: re.Pattern[str] = re.compile(r"^-\s+\[[ xX]\]\s+\S")
+BULLET_RE: re.Pattern[str] = re.compile(r"^\s*[-*]\s+\[[ xX]\]\s+\S")
+TICKED_RE: re.Pattern[str] = re.compile(r"^\s*[-*]\s+\[[xX]\]")
 
 # Inline links [text](target); the target may carry a #fragment.
 LINK_RE: re.Pattern[str] = re.compile(r"\[[^\]]*\]\((?P<target>[^)\s]+)\)")
@@ -50,18 +51,34 @@ def _workstream_bullets() -> list[str]:
     return [line for line in section.splitlines() if BULLET_RE.match(line)]
 
 
-def _spec_row_first_columns() -> set[str]:
-    """First-column cell texts of every markdown table in docs/spec.md."""
-    cols: set[str] = set()
+def _feature_table_rows() -> set[str]:
+    """First-column texts of the spec's feature table.
+
+    The feature table is identified structurally: the table whose header row
+    contains the Feature and Status columns. Scoping to that table (not every
+    markdown table) keeps the "resolves against the feature table" promise
+    literal — an anchor colliding with an unrelated table's first column
+    must not pass.
+    """
+    rows: set[str] = set()
+    in_feature_table = False
     for line in SPEC.read_text(encoding="utf-8").splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
+            in_feature_table = False
             continue
         cells = [c.strip() for c in stripped.strip("|").split("|")]
-        if len(cells) < 2 or set(cells[0]) <= {"-", ":"}:
+        if len(cells) < 2:
+            in_feature_table = False
             continue
-        cols.add(_norm(cells[0]))
-    return cols
+        if {"Feature", "Status"} <= {_norm(c) for c in cells}:
+            in_feature_table = True  # header fingerprint row
+            continue
+        if set(cells[0]) <= {"-", ":"}:
+            continue  # separator row
+        if in_feature_table:
+            rows.add(_norm(cells[0]))
+    return rows
 
 
 def _heading_slugs(text: str) -> set[str]:
@@ -86,8 +103,8 @@ def test_every_workstream_declares_spec_anchor() -> None:
 
 
 def test_spec_anchors_resolve() -> None:
-    rows = _spec_row_first_columns()
-    assert rows, "docs/spec.md has no markdown tables to resolve anchors against"
+    rows = _feature_table_rows()
+    assert rows, "docs/spec.md has no feature table to resolve anchors against"
     for bullet in _workstream_bullets():
         m = WORKSTREAM_RE.match(bullet)
         if m is None:
@@ -97,18 +114,20 @@ def test_spec_anchors_resolve() -> None:
         anchor = _norm(m.group("anchor"))
         title = m.group("title")
         assert anchor in rows, (
-            f"TODO.md workstream {title!r} declares spec anchor {anchor!r}, but no "
-            "table row in docs/spec.md starts with that text. Update the '— spec:' "
-            "field or the spec row."
+            f"TODO.md workstream {title!r} declares spec anchor {anchor!r}, but the "
+            "docs/spec.md feature table has no such row. Update the '— spec:' "
+            "field or the feature-table row."
         )
 
 
 def test_no_stale_done_workstreams() -> None:
     section = _section(ROADMAP.read_text(encoding="utf-8"), "Open Workstreams")
     shipped = re.findall(r"✅|\bDONE\b", section)
-    assert not shipped, (
-        "Open Workstreams contains shipped markers; move finished items to "
-        "docs/archive/roadmap-archive.md"
+    ticked = [b for b in _workstream_bullets() if TICKED_RE.match(b)]
+    assert not shipped and not ticked, (
+        "Open Workstreams contains finished items; move them to "
+        "docs/archive/roadmap-archive.md. "
+        f"markers={shipped} ticked={ticked}"
     )
 
 
@@ -126,6 +145,10 @@ def test_roadmap_links_resolve() -> None:
             candidate = REPO_ROOT / path_part.lstrip("/")
             if not candidate.exists():
                 bad.append(target)
+            elif fragment and candidate.suffix == ".md" and candidate.is_file():
+                target_slugs = _heading_slugs(candidate.read_text(encoding="utf-8"))
+                if fragment not in target_slugs:
+                    bad.append(target)
         elif fragment and fragment not in slugs:
             bad.append(target)
     assert not bad, f"TODO.md links to missing targets: {bad}"
