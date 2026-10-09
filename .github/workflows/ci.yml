@@ -25,3 +25,5 @@ jobs:
         run: agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9
       - name: Experiment-discipline demo (violations must fail)
         run: PYTHONPATH=src python -m experiment.demo
+      - name: Simpson-safe aggregation demo (reversal must be refused)
+        run: PYTHONPATH=src python -m experiment.demo_simpson
