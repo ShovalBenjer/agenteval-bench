@@ -612,8 +612,10 @@ def cmd_snapshot(args: list[str]) -> int:
         print(f"created: {version.created_at}  prev: {version.prev_version_id}")
         print(f"owner: {meta.owner}")
         print(f"why: {meta.why}")
-        if meta.changed_from_prev:
+        if meta.changed_from_prev and version.prev_version_id:
             print(f"changed from {version.prev_version_id}: {meta.changed_from_prev}")
+        elif not version.prev_version_id:
+            print("initial version (no predecessor)")
         if meta.cadence:
             print(f"update cadence: {meta.cadence}")
         if meta.regression_set:
@@ -631,6 +633,7 @@ def cmd_snapshot(args: list[str]) -> int:
         return 0
     if sub == "compare":
         return _snapshot_compare(rest)
+    if sub == "verify":
         rest, store_s = _flag(rest, "--store")
         rest, suite_name = _flag(rest, "--suite")
         rest, version_id = _flag(rest, "--version")

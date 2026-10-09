@@ -442,7 +442,7 @@ def test_cli_show_prints_version_record(monkeypatch, capsys, tmp_path):
     assert code == 0
     assert "owner: eval-team" in out
     assert "why: smoke baseline" in out
-    assert "changed from None: initial freeze" in out
+    assert "initial version (no predecessor)" in out
     assert "update cadence: weekly" in out
     assert "digest=sha256:" in out
     assert "baseline: pass_rate 100.0%" in out
@@ -752,3 +752,28 @@ def test_production_failure_kind_validated():
 def test_promotion_record_missing_key():
     with pytest.raises(ValueError, match="missing"):
         PromotionRecord.from_dict({"failure_id": "x"})
+
+
+def test_cli_verify_ok_and_corrupted(monkeypatch, capsys, tmp_path):
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    code, out, _ = _cli_run(
+        ["snapshot", "verify", "--store", store, "--suite", "cli-smoke", "--version", "v1"],
+        monkeypatch, capsys)
+    assert code == 0, out
+    assert "OK: cli-smoke/v1 hash-verified" in out
+    target = tmp_path / "store" / "cli-smoke" / "v1" / "suite.json"
+    target.write_bytes(target.read_bytes() + b" ")
+    code, _, err = _cli_run(
+        ["snapshot", "verify", "--store", store, "--suite", "cli-smoke", "--version", "v1"],
+        monkeypatch, capsys)
+    assert code == 1
+    assert "CORRUPTED" in err
+
+
+def test_cli_verify_unknown_version(monkeypatch, capsys, tmp_path):
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    code, _, err = _cli_run(
+        ["snapshot", "verify", "--store", store, "--suite", "cli-smoke", "--version", "v9"],
+        monkeypatch, capsys)
+    assert code == 1
+    assert "CORRUPTED" in err
