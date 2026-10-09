@@ -26,7 +26,7 @@ jobs:
           python-version: "3.12"
       - name: Run coffee-break deliberation
         env:
-          TOPIC: ${{ inputs.topic || github.event.issue.title || 'open brainstorm: current blockers' }}
+          TOPIC: "${{ inputs.topic || github.event.issue.title || 'open brainstorm: current blockers' }}"
           TOPIC_BODY: ${{ github.event.issue.body || '' }}
           JEV_MODEL_TOKEN: ${{ secrets.JEV_MODEL_TOKEN }}
           REPO: ${{ github.repository }}
