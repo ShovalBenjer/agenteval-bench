@@ -158,3 +158,45 @@ exits non-zero unless every refusal fires and the compliant paths
   **adaptations** of published methods; the FWER/variance numbers are
   **measured** on seeded synthetic data in this repo (rerun the demo);
   the (2.96, 1.97) cross-check is a **secondary-only** oracle.
+
+## Simpson's paradox: never trust a pooled delta (agenteval-bench#36)
+
+Combining results across periods with different allocation percentages
+can reverse the apparent direction of an effect (Kohavi, Tang & Xu,
+*Trustworthy Online Controlled Experiments*, ch. 18 — **established**).
+The book's worked example: Treatment beats Control on Friday (2.30% vs
+2.02%) and on Saturday (1.2% vs 1.00%), yet looks worse when the two days
+are pooled (1.20% vs 1.68%), because the treatment share rose from 1% to
+50% between periods. The same reversal holds across segments.
+
+Model-comparison leaderboards pool scores across eval runs, task
+categories, and time — exactly the conditions that manufacture reversals
+(**adaptation**). A "model X wins" claim from naive pooling across runs
+with different task mixes is as untrustworthy as the pooled
+Friday+Saturday estimate. This is distinct from #32 (no peeking, CUPED):
+that governs how a single comparison is run; this governs how results
+from multiple slices are combined.
+
+Enforcement (not prose): `experiment.simpson` provides the seam —
+`check_aggregation` / `assert_aggregation` / `win_claim`:
+
+- A win claim can only be constructed from strata — there is no
+  pooled-only path. `disaggregate` is mandatory output on every path,
+  including refusals.
+- `ALLOCATION_SHIFT`: pooled reporting is refused when the treated share
+  differs across slices by more than `allocation_tolerance` (default 5pp).
+- `SIMPSON_REVERSAL`: a pooled "win" that flips direction in any stratum
+  is REJECTED, not averaged away. A zero-delta stratum is neutral, not a
+  flip.
+- `NON_EXHAUSTIVE_DECOMPOSITION`: the caller's pooled arm totals must
+  reconcile with the stratum sums, so a missing slice cannot hide behind
+  a win.
+
+Run the seeded demo replicating the book's example:
+
+```bash
+PYTHONPATH=src python -m experiment.demo_simpson
+```
+
+It exits nonzero unless the reversal is named, the win claim is
+rejected, and all refusal drills fire. CI runs it directly.

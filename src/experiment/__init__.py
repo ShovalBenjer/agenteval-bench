@@ -16,6 +16,13 @@ decision. The pure math helpers (`obrien_fleming_spend`,
 tests pin the seam, and the seam is what CI runs. The verifier is a
 consistency checker over reported evidence (fractions vs plan, decisions
 vs reported z's, arm n's vs n_final); it does not see raw data.
+
+Aggregation discipline (agenteval-bench#36, Kohavi ch. 18) is enforced at
+the `simpson.check_aggregation` / `simpson.assert_aggregation` /
+`simpson.win_claim` seam: pooled win reporting is refused on allocation
+shift across slices, and a win claim that flips direction in any stratum
+of an exhaustive decomposition is rejected. There is no pooled-only
+path to a win claim — `disaggregate` is mandatory output on every path.
 """
 
 from __future__ import annotations
@@ -40,9 +47,28 @@ from experiment.registry import (
     register_plan,
     verify_experiment,
 )
+from experiment.simpson import (
+    DEFAULT_ALLOCATION_TOLERANCE,
+    AggregationReport,
+    AggregationVerdict,
+    AggregationViolation,
+    Stratum,
+    StratumReport,
+    WinVerdict,
+    assert_aggregation,
+    check_aggregation,
+    disaggregate,
+    pooled_rates,
+    stratum_delta,
+    win_claim,
+)
 from experiment.types import CovariateSpec, ExperimentPlan
 
 __all__ = [
+    "DEFAULT_ALLOCATION_TOLERANCE",
+    "AggregationReport",
+    "AggregationVerdict",
+    "AggregationViolation",
     "CovariateSpec",
     "CovariateViolation",
     "CupedResult",
@@ -54,13 +80,22 @@ __all__ = [
     "LookEvidence",
     "PeekRefused",
     "SequentialGate",
+    "Stratum",
+    "StratumReport",
+    "WinVerdict",
+    "assert_aggregation",
+    "check_aggregation",
     "check_experiment",
     "cuped_adjust",
+    "disaggregate",
     "group_sequential_boundaries",
     "inv_normal_cdf",
     "load_plan",
     "obrien_fleming_spend",
+    "pooled_rates",
     "register_plan",
     "spending_report",
+    "stratum_delta",
     "verify_experiment",
+    "win_claim",
 ]
