@@ -394,6 +394,28 @@ def cmd_replay(args: list[str]) -> int:
     return 0
 
 
+def _validated_record(report, repo_digest: str) -> dict:
+    """One ``all_validated.jsonl`` record for a validated report.
+
+    Pure and importable for tests. The instance_id uses the single canonical
+    formula (bugsmith.curate.instance_id) — the same one
+    BenchmarkInstance.from_dict enforces — so the jsonl joins mechanically
+    with the curated instance JSONs via instance_id, strategy, and patch_sha.
+    """
+    from bugsmith.curate import instance_id
+
+    record = report.candidate.record
+    return {
+        "instance_id": instance_id(report, repo_digest),
+        "strategy": record.strategy.value,
+        "seed": record.seed,
+        "target_file": record.target_file,
+        "patch_sha": report.candidate.patch_sha,
+        "fail_to_pass": list(report.fail_to_pass),
+        "pass_to_pass": list(report.pass_to_pass),
+    }
+
+
 def cmd_bugsmith(args: list[str]) -> int:
     """Run the SWE-smith bug-injection pipeline (agenteval-bench#37).
 
@@ -502,17 +524,12 @@ def cmd_bugsmith(args: list[str]) -> int:
                 )
             # The full validated set stays auditable: curation filtering
             # must be reproducible from these records + the config below.
+            # instance_id uses the single canonical formula from
+            # bugsmith.curate.instance_id (same one from_dict enforces).
             with (out / "all_validated.jsonl").open("w", encoding="utf-8") as f:
                 for r in valid:
-                    f.write(json.dumps({
-                        "instance_id": f"{r.candidate.record.strategy.value}"
-                                       f"__{r.candidate.patch_sha}",
-                        "strategy": r.candidate.record.strategy.value,
-                        "seed": r.candidate.record.seed,
-                        "target_file": r.candidate.record.target_file,
-                        "fail_to_pass": list(r.fail_to_pass),
-                        "pass_to_pass": list(r.pass_to_pass),
-                    }, sort_keys=True) + "\n")
+                    f.write(json.dumps(_validated_record(r, digest),
+                                       sort_keys=True) + "\n")
             manifest = {
                 "tool": "agenteval-bench",
                 "command": "bugsmith",

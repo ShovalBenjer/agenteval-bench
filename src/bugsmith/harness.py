@@ -24,7 +24,25 @@ from bugsmith.types import BugCandidate, BugsmithError, ValidationReport
 PYTEST_ARGS = ["-q", "--tb=no", "-p", "no:cacheprovider"]
 RUN_TIMEOUT_S = 300
 
-_FAILED_RE = re.compile(r"^(FAILED|ERROR) (\S+)")
+_FAILED_RE = re.compile(r"^(FAILED|ERROR) (.*)$")
+
+
+def resolve_node_id(tail: str, known_ids: frozenset[str]) -> str:
+    """Resolve a short-summary tail (``<nodeid> - <reason>``) to a node ID.
+
+    Both the node ID and the reason may contain ``" - "`` (spaced
+    parametrized IDs like ``test_p[a - b]``; reasons echoing them), so a
+    blind split is ambiguous. Resolution order:
+    1. exact match against the collected (known) IDs;
+    2. longest known ID that prefixes the tail followed by ``" - "``;
+    3. fallback: split at the last ``" - "`` (best effort, no known set).
+    """
+    if tail in known_ids:
+        return tail
+    cands = [k for k in known_ids if tail.startswith(k + " - ")]
+    if cands:
+        return max(cands, key=len)
+    return tail.rsplit(" - ", 1)[0] if " - " in tail else tail
 
 
 @dataclass(frozen=True)
@@ -34,11 +52,17 @@ class TestOutcome:
     returncode: int
 
 
-def parse_pytest_output(output: str, returncode: int) -> TestOutcome:
+def parse_pytest_output(
+    output: str, returncode: int, known_ids: frozenset[str] = frozenset()
+) -> TestOutcome:
     """Extract test node IDs from ``pytest -q --tb=no`` output.
 
     A collection error poisons the whole run: every test counts as failed
     (the bug broke the suite structurally, not just behaviorally).
+
+    ``known_ids`` (the --collect-only set) disambiguates summary tails when
+    node IDs or reasons contain ``" - "``; without it, resolution is
+    best-effort.
     """
     failed: set[str] = set()
     in_summary = False
@@ -50,7 +74,7 @@ def parse_pytest_output(output: str, returncode: int) -> TestOutcome:
         if in_summary:
             m = _FAILED_RE.match(stripped)
             if m:
-                failed.add(m.group(2).split(" - ")[0])
+                failed.add(resolve_node_id(m.group(2), known_ids))
                 continue
             if stripped.startswith("===="):
                 in_summary = False
@@ -71,7 +95,11 @@ KNOWN_EXIT_CODES = frozenset({0, 1, 2, 5})
 class Runner(Protocol):
     """Executes the target repo's test suite in a prepared work tree."""
 
-    def run(self, work_tree: Path) -> TestOutcome: ...
+    def run(
+        self, work_tree: Path, known_ids: frozenset[str] = frozenset()
+    ) -> TestOutcome:
+        """Run the suite; ``known_ids`` disambiguates summary-line parsing."""
+        ...
 
     def collect(self, work_tree: Path) -> frozenset[str]:
         """All test node IDs, via --collect-only (independent of pass/fail)."""
@@ -83,7 +111,9 @@ def _parse_collected(output: str) -> frozenset[str]:
     for line in output.splitlines():
         line = line.strip()
         if "::" in line and not line.startswith(("=", "<", "ERROR")):
-            ids.add(line.split(" ")[0])
+            # Node IDs may contain spaces (parametrized IDs like
+            # test_p[a - b]); the whole line is the ID, never split it.
+            ids.add(line)
     return frozenset(ids)
 
 
@@ -136,7 +166,9 @@ class LocalRunner:
     Not a silent fallback: callers choose it deliberately (e.g. --local).
     """
 
-    def run(self, work_tree: Path) -> TestOutcome:
+    def run(
+        self, work_tree: Path, known_ids: frozenset[str] = frozenset()
+    ) -> TestOutcome:
         proc = subprocess.run(
             ["python3", "-m", "pytest", *PYTEST_ARGS],
             cwd=str(work_tree),
@@ -147,7 +179,7 @@ class LocalRunner:
             check=False,
             text=True,
         )
-        return parse_pytest_output(proc.stdout, proc.returncode)
+        return parse_pytest_output(proc.stdout, proc.returncode, known_ids)
 
     def collect(self, work_tree: Path) -> frozenset[str]:
         proc = subprocess.run(
@@ -173,7 +205,9 @@ class DockerRunner:
     def __init__(self, image: TargetImage) -> None:
         self._image = image
 
-    def run(self, work_tree: Path) -> TestOutcome:
+    def run(
+        self, work_tree: Path, known_ids: frozenset[str] = frozenset()
+    ) -> TestOutcome:
         proc = subprocess.run(
             _docker_base(self._image, work_tree)
             + ["sh", "-c", _container_pytest_script(PYTEST_ARGS)],
@@ -183,7 +217,7 @@ class DockerRunner:
             check=False,
             text=True,
         )
-        return parse_pytest_output(proc.stdout, proc.returncode)
+        return parse_pytest_output(proc.stdout, proc.returncode, known_ids)
 
     def collect(self, work_tree: Path) -> frozenset[str]:
         proc = subprocess.run(
@@ -235,7 +269,11 @@ def validate(
     except PatchError as e:
         raise BugsmithError(f"candidate patch does not apply: {e}") from e
 
-    outcome = runner.run(patched)
+    # Collect BEFORE running: the --collect-only node-ID set disambiguates
+    # FAILED/ERROR summary tails (node IDs and reasons may both contain
+    # " - "), so parsed failures resolve to real, addressable test IDs.
+    collected = runner.collect(patched)
+    outcome = runner.run(patched, known_ids=collected)
     if outcome.returncode not in KNOWN_EXIT_CODES:
         raise BugsmithError(
             f"pytest exited with code {outcome.returncode} on the patched tree: "
@@ -245,9 +283,9 @@ def validate(
         failed_after = frozenset(baseline_passed)  # structural break: everything fails
         passed_after = frozenset()
     else:
-        # passed_after = collected - failed. Re-collect on the patched tree
-        # so renamed/deleted tests cannot silently vanish from the math.
-        collected = runner.collect(patched)
+        # passed_after = collected - failed. The patched-tree collect above
+        # (not a re-collect) is the same set, so renamed/deleted tests cannot
+        # silently vanish from the math.
         failed_after = outcome.failed
         passed_after = collected - failed_after
 

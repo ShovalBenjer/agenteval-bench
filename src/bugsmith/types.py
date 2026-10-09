@@ -86,7 +86,7 @@ class ValidationReport:
 class BenchmarkInstance:
     """A validated, curated benchmark instance ready for agent evaluation."""
 
-    instance_id: str  # f"{strategy.value}__{patch_sha}"
+    instance_id: str  # canonical: f"{strategy.value}__{repo_digest[:8]}__{patch_sha}" (bugsmith.curate.instance_id; from_dict enforces)
     record: GenerationRecord
     patch: str
     fail_to_pass: tuple[str, ...]

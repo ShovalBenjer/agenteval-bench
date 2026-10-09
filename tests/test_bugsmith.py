@@ -24,11 +24,13 @@ from bugsmith.buggen import (
     _collect_sites,
     _mutate_source,
 )
-from bugsmith.curate import select_subset, to_instance
+from bugsmith.curate import instance_id, select_subset, to_instance
 from bugsmith.harness import (
     LocalRunner,
+    _parse_collected,
     baseline,
     parse_pytest_output,
+    resolve_node_id,
     validate,
 )
 from bugsmith.harness import (
@@ -216,6 +218,72 @@ def test_parse_pytest_output_failure_lines() -> None:
     assert not o.collection_error
 
 
+def test_parse_pytest_output_keeps_spaced_node_ids() -> None:
+    # Parametrized IDs with spaces must survive parsing intact: the stored
+    # FAIL_TO_PASS lists are only useful if they address real tests.
+    out = ("F.\n==== short test summary info ====\n"
+           "FAILED tests/test_p.py::test_add_param[a - b] - assert 1 == 2\n"
+           "FAILED tests/test_p.py::test_add_param[plain] - assert 3 == 4\n"
+           "==== 2 failed ====\n")
+    o = parse_pytest_output(out, 1)
+    assert o.failed == frozenset({
+        "tests/test_p.py::test_add_param[a - b]",
+        "tests/test_p.py::test_add_param[plain]",
+    })
+
+
+def test_parse_collected_keeps_spaced_node_ids() -> None:
+    out = ("tests/test_p.py::test_add_param[a - b]\n"
+           "tests/test_p.py::test_add_param[plain]\n")
+    ids = _parse_collected(out)
+    assert ids == frozenset({
+        "tests/test_p.py::test_add_param[a - b]",
+        "tests/test_p.py::test_add_param[plain]",
+    })
+
+
+def test_resolve_node_id_disambiguates_reason_with_separator() -> None:
+    # The exact ambiguity class: both the node ID and the failure reason
+    # contain " - ". Resolution must use the collected ID set, not a blind
+    # split.
+    known = frozenset({
+        "tests/test_sp.py::test_lab[a - b]",
+        "tests/test_sp.py::test_lab[plain]",
+    })
+    tail = "tests/test_sp.py::test_lab[a - b] - AssertionError: assert 'a - b' == 'plain'"
+    assert resolve_node_id(tail, known) == "tests/test_sp.py::test_lab[a - b]"
+    # Exact match still wins when there is no reason at all.
+    assert resolve_node_id("tests/test_sp.py::test_lab[plain]", known) == \
+        "tests/test_sp.py::test_lab[plain]"
+    # No known set: best-effort last-separator split (unchanged legacy path).
+    assert resolve_node_id("tests/t.py::test_x - assert 1 == 2", frozenset()) == \
+        "tests/t.py::test_x"
+
+
+def test_spaced_node_ids_survive_live_run(tmp_path: Path) -> None:
+    # Live regression: a real pytest run through LocalRunner must produce
+    # the full spaced node IDs in both collect() and run().failed — the
+    # validate() path passes the collected set as known_ids.
+    target = tmp_path / "target"
+    (target / "tests").mkdir(parents=True)
+    (target / "tests" / "__init__.py").write_text("")
+    (target / "tests" / "test_sp.py").write_text(
+        "import pytest\n\n"
+        "@pytest.mark.parametrize('label', ['a - b', 'plain'])\n"
+        "def test_lab(label):\n"
+        "    assert label == 'plain'\n"
+    )
+    runner = LocalRunner()
+    collected = runner.collect(target)
+    spaced = "tests/test_sp.py::test_lab[a - b]"
+    plain = "tests/test_sp.py::test_lab[plain]"
+    assert spaced in collected
+    assert plain in collected
+    outcome = runner.run(target, known_ids=collected)
+    assert spaced in outcome.failed
+    assert plain not in outcome.failed
+
+
 def test_parse_pytest_output_collection_error() -> None:
     out = "==== short test summary info ====\nERROR tests/test_a.py\n" \
           "!!!! Interrupted: 1 error during collection !!!!\n"
@@ -241,7 +309,7 @@ def test_validate_collection_error_breaks_everything(tmp_path: Path, monkeypatch
     runner = LocalRunner()
     passed = baseline(FIXTURE, runner, work)
 
-    def fake_run(self, work_tree: Path) -> HarnessOutcome:
+    def fake_run(self, work_tree: Path, known_ids: frozenset = frozenset()) -> HarnessOutcome:
         return HarnessOutcome(failed=frozenset(), collection_error=True,
                               returncode=2)
 
@@ -256,7 +324,7 @@ def test_validate_collection_error_breaks_everything(tmp_path: Path, monkeypatch
 def test_baseline_requires_green_tree(tmp_path: Path, monkeypatch) -> None:
     work = tmp_path / "w"
 
-    def fake_run(self, work_tree: Path) -> HarnessOutcome:
+    def fake_run(self, work_tree: Path, known_ids: frozenset = frozenset()) -> HarnessOutcome:
         return HarnessOutcome(failed=frozenset({"t1"}), collection_error=False,
                               returncode=1)
 
@@ -532,10 +600,25 @@ def test_instance_id_binds_repo_digest() -> None:
     assert "digest-a"[:8] in a.instance_id
 
 
+def test_validated_record_uses_canonical_instance_id() -> None:
+    # The CLI's all_validated.jsonl writer must use the single canonical
+    # formula: the record joins with the curated instance JSONs on
+    # instance_id, so a second formula here silently breaks the audit trail.
+    from agenteval_bench.cli import _validated_record
+
+    r = _valid_report(BugStrategy.PROCEDURAL_AST, 1, "d1")
+    digest = "digest-aaa"
+    rec = _validated_record(r, digest)
+    assert rec["instance_id"] == instance_id(r, digest)
+    assert rec["instance_id"] == to_instance(r, digest).instance_id
+    assert rec["patch_sha"] == r.candidate.patch_sha
+    assert rec["strategy"] == r.candidate.record.strategy.value
+
+
 def test_baseline_rejects_abnormal_exit_code(tmp_path: Path, monkeypatch) -> None:
     work = tmp_path / "w"
 
-    def fake_run(self, work_tree: Path) -> HarnessOutcome:
+    def fake_run(self, work_tree: Path, known_ids: frozenset = frozenset()) -> HarnessOutcome:
         return HarnessOutcome(failed=frozenset(), collection_error=False,
                               returncode=139)
 

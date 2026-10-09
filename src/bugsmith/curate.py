@@ -19,7 +19,15 @@ from bugsmith.types import (
 )
 
 
-def _instance_id(report: ValidationReport, repo_digest: str) -> str:
+def instance_id(report: ValidationReport, repo_digest: str) -> str:
+    """The single canonical instance identity.
+
+    ``{strategy}__{repo_digest[:8]}__{patch_sha}``. This is the ONLY
+    construction site for instance IDs: ``to_instance`` and the CLI's
+    ``all_validated.jsonl`` writer both use it, and
+    ``BenchmarkInstance.from_dict`` refuses any ID that does not match this
+    formula. One identity, one formula — the audit trail stays joinable.
+    """
     return (f"{report.candidate.record.strategy.value}"
             f"__{repo_digest[:8]}__{report.candidate.patch_sha}")
 
@@ -28,7 +36,7 @@ def to_instance(report: ValidationReport, repo_digest: str) -> BenchmarkInstance
     if not report.is_valid_instance:
         raise BugsmithError("only validated instances can be curated")
     return BenchmarkInstance(
-        instance_id=_instance_id(report, repo_digest),
+        instance_id=instance_id(report, repo_digest),
         record=report.candidate.record,
         patch=report.candidate.patch,
         fail_to_pass=report.fail_to_pass,
