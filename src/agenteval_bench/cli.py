@@ -165,6 +165,63 @@ def cmd_baseline(args: list[str]) -> int:
     return 0
 
 
+def cmd_alt_test(args: list[str]) -> int:
+    """Run the Alternative Annotator Test on a recorded annotation dataset.
+
+    Judge labels are recorded data (like replay outputs), never live LLM
+    calls. Prints the winning-rate leaderboard; --out writes the JSON report.
+    """
+    args, data_path = _flag(args, "--data")
+    args, epsilon_s = _flag(args, "--epsilon", "0.1")
+    args, q_s = _flag(args, "--q", "0.05")
+    args, seed_s = _flag(args, "--seed", str(DEFAULT_SEED))
+    args, out = _flag(args, "--out")
+
+    if not data_path:
+        print("Error: --data <file.jsonl> is required", file=sys.stderr)
+        return 1
+    try:
+        epsilon = float(epsilon_s or "0.1")
+        q = float(q_s or "0.05")
+        seed = int(seed_s or str(DEFAULT_SEED))
+    except ValueError:
+        print("Error: --epsilon/--q must be numbers, --seed an integer", file=sys.stderr)
+        return 1
+
+    from alt_test.runner import (
+        InsufficientCoverage,
+        dataset_digest,
+        load_jsonl,
+        render_text,
+        run_alt_test,
+    )
+    from alt_test.types import AltTestConfig
+
+    try:
+        config = AltTestConfig(epsilon=epsilon, q=q, seed=seed)
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    try:
+        items = load_jsonl(data_path)
+    except (OSError, ValueError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    try:
+        report = run_alt_test(items, config, input_digest=dataset_digest(items))
+    except (ValueError, InsufficientCoverage) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    print(render_text(report))
+    if out:
+        import json as _json
+
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(_json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
+        print(f"Report: {out}")
+    return 0
+
+
 def cmd_replay(args: list[str]) -> int:
     """Verify a replay log is bit-exact: re-run and byte-compare."""
     args, log_path = _flag(args, "--log")
@@ -218,6 +275,8 @@ def main() -> None:
         print("                         [--seed 42] [--replay-log replay.json]")
         print("       agenteval-bench baseline --suite <file> --out baseline.json [--seed 42]")
         print("       agenteval-bench replay --log replay.json --suite <file> [--check]")
+        print("       agenteval-bench alt-test --data annotations.jsonl [--epsilon 0.1]")
+        print("                                [--q 0.05] [--seed 42] [--out report.json]")
         return
 
     cmd, rest = args[0], args[1:]
@@ -227,6 +286,8 @@ def main() -> None:
         sys.exit(cmd_baseline(rest))
     elif cmd == "replay":
         sys.exit(cmd_replay(rest))
+    elif cmd == "alt-test":
+        sys.exit(cmd_alt_test(rest))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)

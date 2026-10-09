@@ -201,6 +201,7 @@ print(result.summary())
 | Deterministic scoring  | ✅ shipped  | v0.1.0         |
 | CLI `run` + CI gate    | ✅ shipped  | v0.1.0         |
 | Golden replay suites   | ✅ shipped  | v0.1.0         |
+| alt-test benchmark     | ✅ shipped  | v0.1.0         |
 | LLM-as-judge scoring   | `planned`   | v0.2           |
 | `compare` regression   | `planned`   | v0.2           |
 | `report` (md + json)   | `planned`   | v0.2           |
