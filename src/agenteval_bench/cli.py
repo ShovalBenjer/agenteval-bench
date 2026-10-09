@@ -204,9 +204,16 @@ def cmd_alt_test(args: list[str]) -> int:
         return 1
     try:
         items = load_jsonl(data_path)
-    except (OSError, ValueError) as e:
+    except (OSError, ValueError, TypeError) as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    if items and items[0].task == "text":
+        print(
+            "Note: text task uses the deterministic trigram-Jaccard similarity "
+            "surrogate (see docs/ALT-TEST.md); inject a custom sim via the "
+            "Python API for embedding-based SIM.",
+            file=sys.stderr,
+        )
     try:
         report = run_alt_test(items, config, input_digest=dataset_digest(items))
     except (ValueError, InsufficientCoverage) as e:
@@ -214,10 +221,8 @@ def cmd_alt_test(args: list[str]) -> int:
         return 1
     print(render_text(report))
     if out:
-        import json as _json
-
         with open(out, "w", encoding="utf-8") as f:
-            f.write(_json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
+            f.write(json.dumps(report.to_dict(), indent=2, sort_keys=True) + "\n")
         print(f"Report: {out}")
     return 0
 
@@ -277,6 +282,7 @@ def main() -> None:
         print("       agenteval-bench replay --log replay.json --suite <file> [--check]")
         print("       agenteval-bench alt-test --data annotations.jsonl [--epsilon 0.1]")
         print("                                [--q 0.05] [--seed 42] [--out report.json]")
+        print("       (--seed is recorded for provenance; the test itself is deterministic)")
         return
 
     cmd, rest = args[0], args[1:]

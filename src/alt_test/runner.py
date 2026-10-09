@@ -10,6 +10,8 @@ FDR control; the winning rate omega is the fraction of rejections.
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 from collections.abc import Callable, Sequence
 
@@ -115,6 +117,7 @@ def _validate(items: Sequence[AltTestItem], config: AltTestConfig) -> TaskType:
                 f"item {item.id!r} has {n_ann} annotators, "
                 f"need at least {config.min_annotators}"
             )
+        _check_label_types(item)
     # Items may carry no judge labels at all (a judge absent from an item is
     # simply not scored on it); per-pair coverage is enforced later and
     # names the offending (judge, annotator) pair.
@@ -122,6 +125,29 @@ def _validate(items: Sequence[AltTestItem], config: AltTestConfig) -> TaskType:
     if not judges:
         raise ValueError("no judge labels found in the dataset")
     return next(iter(tasks))
+
+
+def _check_label_types(item: AltTestItem) -> None:
+    """Refuse task/label-type mismatches at the boundary.
+
+    alignment_score would raise these mid-run; failing here keeps the
+    error at the data boundary with the item id attached.
+    """
+    for name, label in list(item.annotator_labels.items()) + list(item.judge_labels.items()):
+        if isinstance(label, bool):
+            raise TypeError(f"item {item.id!r}: label {name!r} must not be a bool")
+        if item.task == "continuous":
+            if not isinstance(label, (int, float)):
+                raise TypeError(
+                    f"item {item.id!r}: continuous task needs numeric labels, "
+                    f"{name!r} got {label!r}"
+                )
+        else:
+            if not isinstance(label, str):
+                raise TypeError(
+                    f"item {item.id!r}: {item.task} task needs string labels, "
+                    f"{name!r} got {label!r}"
+                )
 
 
 def _compare_against_annotator(
@@ -243,6 +269,7 @@ def run_alt_test(
         n_items=len(items),
         input_digest=input_digest,
         seed=config.seed,
+        sim_name=getattr(sim, "__name__", type(sim).__name__),
         notes=tuple(notes),
     )
 
@@ -254,16 +281,17 @@ def render_text(report: AltTestReport) -> str:
         (
             f"epsilon={report.epsilon} q={report.q} "
             f"FDR={report.fdr_procedure} omega_threshold={report.omega_threshold} "
-            f"n_items={report.n_items}"
+            f"n_items={report.n_items} seed={report.seed} sim={report.sim_name}"
         ),
         "",
-        f"{'judge':<24}{'rho':>8}{'omega':>8}{'justified':>11}  per-annotator rho_f",
+        f"{'judge':<24}{'rho':>8}{'omega':>8}{'justified':>11}  compared  per-annotator rho_f",
     ]
     for v in report.verdicts:
         per = ",".join(f"{c.rho_f:.2f}" for c in v.comparisons)
+        compared = f"{len(v.comparisons)}/{v.m_annotators}"
         lines.append(
             f"{v.judge:<24}{v.rho:>8.3f}{v.omega:>8.3f}"
-            f"{v.justified!s:>11}  {per}"
+            f"{v.justified!s:>11}  {compared:>9}  {per}"
         )
     if report.notes:
         lines += ["", "notes:"]
@@ -278,8 +306,6 @@ def load_jsonl(path: str) -> list[AltTestItem]:
                 "annotators": {name: label}, "judges": {name: label}}.
     Boundary-typed: malformed rows raise with the line number.
     """
-    import json
-
     items: list[AltTestItem] = []
     with open(path, encoding="utf-8") as f:
         for lineno, line in enumerate(f, start=1):
@@ -324,9 +350,6 @@ def load_jsonl(path: str) -> list[AltTestItem]:
 
 def dataset_digest(items: Sequence[AltTestItem]) -> str:
     """sha256 over a canonical serialization of the dataset (provenance)."""
-    import hashlib
-    import json
-
     canonical = json.dumps(
         [
             {

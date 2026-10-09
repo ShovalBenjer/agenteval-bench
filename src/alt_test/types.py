@@ -51,7 +51,9 @@ class AltTestItem:
 class AltTestConfig:
     """Knobs of the alt-test procedure."""
 
-    epsilon: float = 0.1  #: cost-benefit margin; H0: rho_h - rho_f >= epsilon
+    epsilon: float = 0.1  #: cost-benefit margin; H0: rho_h - rho_f >= epsilon.
+    #: Bounded to [0, 0.5] per the paper's recommended range: beyond 0.5 the
+    #: margin exceeds the plausible advantage gap and every judge passes.
     q: float = 0.05  #: target false discovery rate for the BY procedure
     min_annotators: int = 3  #: minimum annotators per item
     min_items: int = 50  #: minimum items in the dataset
@@ -68,6 +70,13 @@ class AltTestConfig:
             raise ValueError("alt-test requires at least 3 annotators")
         if self.min_items < 1:
             raise ValueError("min_items must be positive")
+        if self.min_pair_items < 2:
+            raise ValueError(
+                f"min_pair_items must be >= 2 (a test needs n >= 2), "
+                f"got {self.min_pair_items}"
+            )
+        if self.t_test_min_n < 2:
+            raise ValueError(f"t_test_min_n must be >= 2, got {self.t_test_min_n}")
 
 
 @dataclass(frozen=True)
@@ -108,6 +117,7 @@ class AltTestReport:
     n_items: int = 0
     input_digest: str = ""
     seed: int = 42
+    sim_name: str = "default_text_sim"  #: similarity used for the text task
     notes: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
@@ -143,5 +153,6 @@ class AltTestReport:
             "n_items": self.n_items,
             "input_digest": self.input_digest,
             "seed": self.seed,
+            "sim_name": self.sim_name,
             "notes": list(self.notes),
         }

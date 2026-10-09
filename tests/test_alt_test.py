@@ -129,6 +129,89 @@ def test_by_fdr_hand_computed():
     assert benjamini_yekutieli(p, 0.5) == [True, True, True, False]
 
 
+def test_wilcoxon_hand_computed():
+    # Hand-computed independent pin. diffs=[0.5, 1.5, -0.5], eps=0:
+    # |e| ranks: 0.5,0.5 tie -> 1.5,1.5; 1.5 -> 3. W+ = 1.5+3 = 4.5.
+    # mu = 3, var = 3*4*7/24 - (2^3-2)/48 = 3.375, z = (4.5-3+0.5)/sqrt(3.375).
+    # p = Phi(1.0887) ~= 0.862.
+    p = wilcoxon_signed_rank_one_sided([0.5, 1.5, -0.5], epsilon=0.0)
+    assert p == pytest.approx(0.862, abs=1e-3)
+
+
+def test_report_records_sim_name():
+    items = _discrete_items(n=60, seed=131)
+    report = run_alt_test(items, AltTestConfig(seed=131))
+    assert report.to_dict()["sim_name"] == "default_text_sim"
+
+    def my_sim(a: str, b: str) -> float:
+        return 1.0 if a == b else 0.0
+
+    items_t = [
+        AltTestItem(id=f"t{i}", task="text",
+                    annotator_labels={f"a{k}": "hello world" for k in range(3)},
+                    judge_labels={"j": "hello world"})
+        for i in range(60)
+    ]
+    report_t = run_alt_test(items_t, AltTestConfig(seed=131), sim=my_sim)
+    assert report_t.to_dict()["sim_name"] == "my_sim"
+
+
+def test_config_rejects_min_pair_items_below_two():
+    with pytest.raises(ValueError, match="min_pair_items"):
+        AltTestConfig(min_pair_items=1)
+    with pytest.raises(ValueError, match="t_test_min_n"):
+        AltTestConfig(t_test_min_n=1)
+
+
+def test_validate_rejects_mismatched_label_types():
+    base = _discrete_items(n=60, seed=141)
+
+    def _retasked(task, label_fn):
+        return [
+            AltTestItem(
+                id=item.id, task=task,
+                annotator_labels={k: label_fn(v) for k, v in item.annotator_labels.items()},
+                judge_labels={k: label_fn(v) for k, v in item.judge_labels.items()},
+            )
+            for item in base
+        ]
+
+    with pytest.raises(TypeError, match="string labels"):
+        run_alt_test(_retasked("text", lambda v: 1.5))
+    with pytest.raises(TypeError, match="numeric labels"):
+        run_alt_test(_retasked("continuous", lambda v: v))
+    with pytest.raises(TypeError, match="must not be a bool"):
+        items = _retasked("discrete", lambda v: v)
+        first = items[0]
+        items[0] = AltTestItem(
+            id=first.id, task=first.task,
+            annotator_labels={**first.annotator_labels, "annX": True},
+            judge_labels=first.judge_labels,
+        )
+        run_alt_test(items)
+
+
+def test_render_text_shows_compared_count_on_partial_coverage():
+    rng = random.Random(151)
+    items = []
+    for i in range(60):
+        ann = {f"ann{a}": rng.choice(LABELS) for a in range(4)}
+        if i < 5:
+            ann["ann4"] = rng.choice(LABELS)  # sparse fifth annotator
+        items.append(
+            AltTestItem(id=f"i{i}", task="discrete",
+                        annotator_labels=ann,
+                        judge_labels={"j": rng.choice(LABELS)})
+        )
+    report = run_alt_test(items, AltTestConfig(epsilon=0.1, q=0.05))
+    (verdict,) = report.verdicts
+    assert len(verdict.comparisons) == 4
+    assert verdict.m_annotators == 5
+    text = render_text(report)
+    assert "4/5" in text
+    assert any("ann4" in note for note in report.notes)
+
+
 def test_wilcoxon_small_n_path_runs():
     rng = random.Random(3)
     diffs = [rng.choice([-1.0, 0.0, 1.0]) for _ in range(20)]

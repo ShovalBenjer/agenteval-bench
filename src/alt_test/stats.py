@@ -125,9 +125,14 @@ def wilcoxon_signed_rank_one_sided(diffs: Sequence[float], epsilon: float) -> fl
     """One-sided Wilcoxon signed-rank p-value for H0: median(d) >= epsilon.
 
     Applied to the epsilon-shifted differences e_i = d_i - epsilon, testing
-    H0: median(e) >= 0 vs H1: median(e) < 0. Normal approximation with
-    average-rank tie handling, tie correction to the variance, and a
-    continuity correction. Zeros are dropped per the standard procedure.
+    H0: median(e) >= 0 vs H1: median(e) < 0. Adaptation note: the paper
+    prescribes "a non-parametric test (e.g. Wilcoxon signed-rank)" for
+    n < 30 without specifying how epsilon enters it; shifting the
+    differences is the standard way to test a non-zero null with the
+    signed-rank test, keeping H0 identical to the t-test path.
+    Normal approximation with average-rank tie handling, tie correction
+    to the variance, and a continuity correction. Zeros are dropped per
+    the standard procedure.
     """
     shifted = [d - epsilon for d in diffs]
     nonzero = [e for e in shifted if e != 0.0]

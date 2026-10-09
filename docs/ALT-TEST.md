@@ -49,11 +49,15 @@ agenteval-bench alt-test --data annotations.jsonl \
 ```
 
 Acceptance: refuses datasets with <3 annotators per item or <50 items;
-refuses mixed task types; a (judge, annotator) pair sharing <10 items
-raises `InsufficientCoverage` naming the pair (fail-closed, no silent
-non-result). The JSON report echoes `epsilon`, `q`, the FDR procedure
-name, and a sha256 `input_digest` of the dataset, so any result is
-reproducible from the single command above.
+refuses mixed task types and task/label-type mismatches at the boundary.
+A (judge, annotator) pair sharing fewer than `min_pair_items` (default 10)
+items is dropped with a named note and the judge's row is computed over
+the surviving annotators — the headline shows `compared X/Y` so the
+denominator never shrinks silently. A judge with no valid pairs at all
+raises `InsufficientCoverage` (fail-closed, no empty leaderboard rows).
+The JSON report echoes `epsilon`, `q`, the FDR procedure name, the
+similarity used (`sim_name`), and a sha256 `input_digest` of the dataset,
+so any result is reproducible from the single command above.
 
 A seeded synthetic demo: `python -m alt_test.demo` (needs `src/` on
 `PYTHONPATH` for a source checkout).
