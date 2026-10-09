@@ -201,7 +201,7 @@ def verify_experiment(
             notes=(),
             plan_digest=plan_digest,
         )
-    except (json.JSONDecodeError, OSError) as e:
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as e:
         return ExperimentVerdict(
             valid=False,
             violations=("REGISTRY_UNREADABLE",),

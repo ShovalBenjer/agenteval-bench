@@ -162,6 +162,28 @@ class TestAlphaSpending:
         assert e1 / n == pytest.approx(0.00557, abs=0.002)
         assert e2 / n == pytest.approx(0.04443, abs=0.003)
 
+    def test_solver_exits_match_spending_monte_carlo_one_sided(self):
+        # Same independent pin for the one-sided kernel path (upper-tail
+        # exit probability, one-sided survival conditioning) — the path
+        # the tabulated oracle covers only at +-0.05.
+        rng = random.Random(4321)
+        looks = (0.5, 1.0)
+        b = group_sequential_boundaries(looks, 0.025, sides="one")
+        n = 200000
+        e1 = e2 = 0
+        r = math.sqrt(0.5)
+        s = math.sqrt(0.5)
+        for _ in range(n):
+            z1 = rng.gauss(0.0, 1.0)
+            z2 = r * z1 + s * rng.gauss(0.0, 1.0)
+            if z1 >= b[0]:
+                e1 += 1
+            elif z2 >= b[1]:
+                e2 += 1
+        # OF-like spending at alpha=0.025: 0.00152 at t=0.5, 0.02348 more.
+        assert e1 / n == pytest.approx(0.00152, abs=0.001)
+        assert e2 / n == pytest.approx(0.02348, abs=0.002)
+
 
 # ---------------------------------------------------------------------------
 # SequentialGate: the no-peeking running check

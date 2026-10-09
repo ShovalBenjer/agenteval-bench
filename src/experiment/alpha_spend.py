@@ -22,12 +22,13 @@ difference is the tested hypothesis, not correctness.
 Numerical note (grid quantization): boundaries are solved on a fixed
 Simpson grid, so the exit-probability function is a step function of
 the boundary — it only changes when the boundary crosses a grid point.
-Each boundary is therefore resolved to half a grid cell (~0.008 at the
-default 1200-point grid), and the bisection converges to the step edge,
-which sits systematically just below the continuous solution (the
-liberal side). Realized per-look exit probabilities exceed the spending
-targets by up to ~density*h. All contract tolerances absorb this, and
-the Monte Carlo test pins the realized exits by an independent method.
+Each boundary is therefore resolved to about a grid cell (h = 0.0167 at
+the default 1200-point grid; typically half a cell, worst case a full
+cell below the continuous solution), and the bisection converges to the
+step edge on the liberal side. Realized per-look exit probabilities
+exceed the spending targets by up to ~2*density*h for two-sided tests
+(~density*h one-sided). All contract tolerances absorb this, and the
+Monte Carlo tests pin the realized exits by an independent method.
 
 All functions are pure and deterministic.
 """
@@ -47,7 +48,7 @@ class PeekRefused(ValueError):
 
 #: Default Simpson grid resolution for the boundary solver. Finer grids
 #: shrink the quantization floor (see module docstring); the solve is
-#: cached per (looks, alpha, sides) so this is a one-time cost.
+#: cached per (looks, alpha, sides, zmax, grid_n) so this is a one-time cost.
 _GRID_N = 1200
 
 
@@ -169,6 +170,14 @@ def _solve_cached(
     spent_prev = 0.0
     for k, t in enumerate(looks):
         target = obrien_fleming_spend(t, alpha) - spent_prev
+        # Fail loud, not silent: the bisection bracket [0, 12] can only
+        # represent targets up to exit(0) (1.0 two-sided, 0.5 one-sided).
+        max_exit = _exit_prob(0.0, dens, grid, w, sides)
+        if target > max_exit:
+            raise ValueError(
+                f"spending target {target:.4f} at t={t} exceeds the maximum "
+                f"exit probability {max_exit:.4f} for sides={sides!r}"
+            )
 
         lo, hi = 0.0, 12.0
         for _ in range(80):
