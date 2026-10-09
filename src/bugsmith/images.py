@@ -1,10 +1,11 @@
 """Docker image construction for the validation harness (agenteval-bench#37).
 
-``create_images`` in the issue's pipeline: a Docker *copy* of the target
-repo is built into an image, and every validation run executes inside a
-fresh container. The working tree is never touched — all patch
-application happens on throwaway copies that are volume-mounted into the
-container at run time.
+``create_images`` in the issue's pipeline: a sealed Docker execution
+environment (Python + pytest + the target repo's declared third-party
+dependencies). Every validation run executes inside a fresh container
+with a throwaway copy of the (patched) target bind-mounted at /work.
+The working tree is never touched, and no repo snapshot is baked into
+the image, so a stale copy can never shadow the tree under test.
 """
 
 from __future__ import annotations
@@ -47,30 +48,73 @@ def repo_digest(repo_root: Path) -> str:
     return h.hexdigest()[:16]
 
 
-def dockerfile_text() -> str:
-    """The image recipe: clean Python + pytest + a copy of the target repo."""
-    return (
-        f"FROM {BASE_IMAGE}\n"
-        "RUN pip install --no-cache-dir pytest\n"
-        "COPY repo /target\n"
-        "WORKDIR /target\n"
-    )
+def collect_requirements(repo_root: Path) -> list[str]:
+    """Third-party dependencies declared by the target repo.
+
+    Parsed from ``pyproject.toml`` (``[project] dependencies``, stdlib
+    tomllib) plus any ``requirements*.txt`` files. ``setup.py``-only
+    projects cannot be parsed safely and are documented as unsupported
+    for dependency installation: the baseline gate then fails loudly if
+    imports are missing, instead of silently half-working.
+    """
+    import tomllib
+
+    repo_root = repo_root.resolve()
+    reqs: list[str] = []
+    pyproject = repo_root / "pyproject.toml"
+    if pyproject.is_file():
+        try:
+            doc = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+            deps = doc.get("project", {}).get("dependencies", [])
+            reqs.extend(d for d in deps if isinstance(d, str) and d.strip())
+        except (tomllib.TOMLDecodeError, OSError) as e:
+            raise BugsmithError(f"cannot parse {pyproject}: {e}") from e
+    for name in ("requirements.txt", "requirements-test.txt",
+                 "test-requirements.txt", "requirements_test.txt"):
+        f = repo_root / name
+        if f.is_file():
+            for line in f.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if line and not line.startswith("#"):
+                    reqs.append(line)
+    # De-duplicated, order-stable.
+    return list(dict.fromkeys(reqs))
+
+
+def dockerfile_text(has_dependencies: bool = False) -> str:
+    """The image recipe: sealed Python + pytest (+ target dependencies).
+
+    The image is a sealed *execution environment*, not a repo snapshot:
+    the target's code travels via bind-mounted throwaway copies at run
+    time, so the working tree is never touched and no stale copy can
+    shadow the patched tree under test.
+    """
+    lines = [
+        f"FROM {BASE_IMAGE}",
+        "RUN pip install --no-cache-dir pytest",
+    ]
+    if has_dependencies:
+        lines += [
+            "COPY deps/requirements.txt /deps/requirements.txt",
+            "RUN pip install --no-cache-dir -r /deps/requirements.txt",
+        ]
+    return "\n".join(lines) + "\n"
 
 
 def build_context(repo_root: Path, context_dir: Path) -> None:
-    """Materialize the docker build context: Dockerfile + a copy of the repo."""
+    """Materialize the docker build context: Dockerfile + dependency manifests."""
     repo_root = repo_root.resolve()
     if not repo_root.is_dir():
         raise BugsmithError(f"repo root not found: {repo_root}")
     context_dir.mkdir(parents=True, exist_ok=True)
-    (context_dir / "Dockerfile").write_text(dockerfile_text(), encoding="utf-8")
-    dest = context_dir / "repo"
-    if dest.exists():
-        shutil.rmtree(dest)
-    shutil.copytree(
-        repo_root,
-        dest,
-        ignore=shutil.ignore_patterns(".git", "__pycache__", "*.pyc", ".venv", "venv"),
+    reqs = collect_requirements(repo_root)
+    deps_dir = context_dir / "deps"
+    if deps_dir.exists():
+        shutil.rmtree(deps_dir)
+    deps_dir.mkdir()
+    (deps_dir / "requirements.txt").write_text("\n".join(reqs) + "\n", encoding="utf-8")
+    (context_dir / "Dockerfile").write_text(
+        dockerfile_text(has_dependencies=bool(reqs)), encoding="utf-8"
     )
 
 

@@ -352,21 +352,65 @@ def test_instance_roundtrip() -> None:
 # --- docker image contract (no daemon needed) ------------------------------
 
 
-def test_dockerfile_installs_pytest_and_copies_repo() -> None:
+def test_dockerfile_is_a_sealed_environment_not_a_repo_snapshot() -> None:
+    # The image must not bake in a repo copy: validation bind-mounts the
+    # patched tree, and a stale in-image copy could shadow it.
     text = dockerfile_text()
     assert "pytest" in text
-    assert "COPY repo /target" in text
     assert "FROM python:3.12-slim" in text
+    assert "COPY repo" not in text
+    assert "/target" not in text
 
 
-def test_build_context_materializes_repo_copy(tmp_path: Path) -> None:
+def test_dockerfile_installs_declared_dependencies() -> None:
+    text = dockerfile_text(has_dependencies=True)
+    assert "COPY deps/requirements.txt" in text
+    assert "pip install --no-cache-dir -r /deps/requirements.txt" in text
+    plain = dockerfile_text(has_dependencies=False)
+    assert "requirements.txt" not in plain
+
+
+def test_build_context_materializes_manifests_not_source(tmp_path: Path) -> None:
     ctx = tmp_path / "ctx"
     build_context(FIXTURE, ctx)
     assert (ctx / "Dockerfile").is_file()
-    copied = ctx / "repo" / "src" / "mcalc" / "arithmetic.py"
-    assert copied.is_file()
-    # The context is a copy: mutating it cannot touch the fixture.
-    assert repo_digest(ctx / "repo") == repo_digest(FIXTURE)
+    assert (ctx / "deps" / "requirements.txt").is_file()
+    # No repo source in the build context.
+    assert not (ctx / "repo").exists()
+
+
+def test_collect_requirements_from_pyproject_and_txt(tmp_path: Path) -> None:
+    from bugsmith.images import collect_requirements
+
+    repo = tmp_path / "r"
+    (repo / "src").mkdir(parents=True)
+    (repo / "pyproject.toml").write_text(
+        '[project]\nname = "x"\ndependencies = ["pyyaml>=6.0", "rich"]\n',
+        encoding="utf-8",
+    )
+    (repo / "requirements-test.txt").write_text(
+        "# comment\npytest>=8.0\npyyaml>=6.0\n", encoding="utf-8"
+    )
+    reqs = collect_requirements(repo)
+    assert reqs == ["pyyaml>=6.0", "rich", "pytest>=8.0"]
+
+
+def test_collect_requirements_empty_for_fixture() -> None:
+    from bugsmith.images import collect_requirements
+
+    assert collect_requirements(FIXTURE) == []
+
+
+def test_procedural_skips_docs_and_examples(tmp_path: Path) -> None:
+    import shutil as _shutil
+
+    repo = tmp_path / "r"
+    _shutil.copytree(FIXTURE, repo, ignore=_shutil.ignore_patterns("__pycache__"))
+    (repo / "docs").mkdir()
+    (repo / "docs" / "conf.py").write_text("x = 1 + 2\n", encoding="utf-8")
+    gen = ProceduralBugGenerator(3)
+    files = gen._source_files(repo)
+    assert all("docs" not in f.parts for f in files)
 
 
 def test_repo_digest_changes_with_content(tmp_path: Path) -> None:

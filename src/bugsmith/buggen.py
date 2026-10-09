@@ -201,14 +201,20 @@ class ProceduralBugGenerator:
 
     def _source_files(self, repo_root: Path) -> list[Path]:
         def is_test_path(p: Path) -> bool:
+            rel_parts = p.relative_to(repo_root).parts
             return any(
                 part in ("test", "tests") or part.startswith("test_")
-                for part in p.parts
+                for part in rel_parts
             )
 
+        # docs/ and examples/ are not library code: mutating them is noise,
+        # not a benchmark instance.
         files = sorted(
             p for p in repo_root.rglob("*.py")
-            if not is_test_path(p) and ".git" not in p.parts
+            if not is_test_path(p)
+            and ".git" not in p.relative_to(repo_root).parts
+            and "docs" not in p.relative_to(repo_root).parts
+            and "examples" not in p.relative_to(repo_root).parts
         )
         if not files:
             raise BugsmithError(f"no source files under {repo_root}")

@@ -487,10 +487,32 @@ def cmd_bugsmith(args: list[str]) -> int:
                     json.dumps(inst.to_dict(), indent=2, sort_keys=True) + "\n",
                     encoding="utf-8",
                 )
+            # The full validated set stays auditable: curation filtering
+            # must be reproducible from these records + the config below.
+            with (out / "all_validated.jsonl").open("w", encoding="utf-8") as f:
+                for r in valid:
+                    f.write(json.dumps({
+                        "instance_id": f"{r.candidate.record.strategy.value}"
+                                       f"__{r.candidate.patch_sha}",
+                        "strategy": r.candidate.record.strategy.value,
+                        "seed": r.candidate.record.seed,
+                        "target_file": r.candidate.record.target_file,
+                        "fail_to_pass": list(r.fail_to_pass),
+                        "pass_to_pass": list(r.pass_to_pass),
+                    }, sort_keys=True) + "\n")
             manifest = {
                 "tool": "agenteval-bench",
                 "command": "bugsmith",
                 "seed": seed,
+                "procedural_count": count,
+                "pr_mirror_specs": pr_mirrors,
+                "curation_config": {
+                    "seed": config.seed,
+                    "fail_to_pass_min": config.fail_to_pass_min,
+                    "fail_to_pass_max": config.fail_to_pass_max,
+                    "max_instances": config.max_instances,
+                    "strategy_quota": dict(config.strategy_quota),
+                },
                 "repo_digest": digest,
                 "baseline_tests": len(passed),
                 "candidates": len(candidates),
