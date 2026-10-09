@@ -418,3 +418,36 @@ def test_patch_sha_is_content_addressed() -> None:
     b = BugCandidate(record=_record(target_file="other.py"), patch="--- a/1.py\n+++ b/1.py\n")
     assert a.patch_sha == b.patch_sha
     assert hashlib.sha256(b"--- a/1.py\n+++ b/1.py\n").hexdigest()[:16] == a.patch_sha
+
+
+def test_docker_run_and_collect_share_pytest_construction(tmp_path, monkeypatch) -> None:
+    # Regression: the CI failure where DockerRunner.run set PYTHONPATH but
+    # _collect_node_ids did not, so baseline collected zero tests. Both
+    # paths must go through the single _container_pytest_script site.
+    import subprocess as sp
+
+    import bugsmith.harness as h
+
+    seen: list[list[str]] = []
+
+    class FakeProc:
+        stdout = ""
+        returncode = 0
+
+    def fake_run(cmd, **kw):
+        seen.append(cmd)
+        return FakeProc()
+
+    monkeypatch.setattr(sp, "run", fake_run)
+    image = h.TargetImage(tag="bugsmith-target:fake", repo_digest="fake")
+    runner = h.DockerRunner(image)
+    runner.run(tmp_path)
+    h._collect_node_ids(tmp_path, runner)
+    assert len(seen) == 2
+    for cmd in seen:
+        script = cmd[-1]
+        assert "PYTHONPATH=$(" in script, f"PYTHONPATH missing from: {script[:80]}"
+        assert "--user" in cmd, "container must run as the host user (file ownership)"
+        assert "PYTHONDONTWRITEBYTECODE=1" in cmd
+    # The two scripts differ only in the pytest args, not the setup.
+    assert seen[0][-1].split("python3 -m pytest")[0] == seen[1][-1].split("python3 -m pytest")[0]

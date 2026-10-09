@@ -73,6 +73,35 @@ def _pythonpath_for(tree: Path) -> str:
     return str(src if src.is_dir() else tree)
 
 
+def _docker_base(image: TargetImage, work_tree: Path) -> list[str]:
+    """Shared docker invocation: host-owned files, no __pycache__ litter."""
+    return [
+        "docker", "run", "--rm",
+        "--user", f"{os.getuid()}:{os.getgid()}",
+        "-e", "PYTHONDONTWRITEBYTECODE=1",
+        "-v", f"{work_tree.resolve()}:/work",
+        image.tag,
+    ]
+
+
+def _container_pytest_script(pytest_args: list[str]) -> str:
+    """Pytest command for inside the container, with the target importable.
+
+    Single construction site for the PYTHONPATH logic: every docker-side
+    pytest invocation (run + collect) goes through here so the two cannot
+    drift apart again.
+    """
+    inner = (
+        "python3 -c \"import pathlib; "
+        "p=pathlib.Path('/work/src'); "
+        "print(p if p.is_dir() else pathlib.Path('/work'))\""
+    )
+    return (
+        f"cd /work && PYTHONPATH=$({inner}) "
+        f"python3 -m pytest {' '.join(pytest_args)}"
+    )
+
+
 class LocalRunner:
     """Subprocess runner. Used by unit tests and as an explicit opt-in.
 
@@ -82,6 +111,7 @@ class LocalRunner:
     def run(self, work_tree: Path) -> TestOutcome:
         env = dict(os.environ)
         env["PYTHONPATH"] = _pythonpath_for(work_tree)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.run(
             ["python3", "-m", "pytest", *PYTEST_ARGS],
             cwd=str(work_tree),
@@ -92,8 +122,7 @@ class LocalRunner:
             check=False,
             text=True,
         )
-        outcome = parse_pytest_output(proc.stdout, proc.returncode)
-        return outcome
+        return parse_pytest_output(proc.stdout, proc.returncode)
 
 
 class DockerRunner:
@@ -107,19 +136,9 @@ class DockerRunner:
         self._image = image
 
     def run(self, work_tree: Path) -> TestOutcome:
-        inner = (
-            "python3 -c \"import pathlib; "
-            "p=pathlib.Path('/work/src'); "
-            "print(p if p.is_dir() else pathlib.Path('/work'))\" "
-        )
         proc = subprocess.run(
-            ["docker", "run", "--rm",
-             "-v", f"{work_tree.resolve()}:/work",
-             self._image.tag, "sh", "-c",
-             (
-                 f"cd /work && PYTHONPATH=$({inner}) "
-                 f"python3 -m pytest {' '.join(PYTEST_ARGS)}"
-             )],
+            _docker_base(self._image, work_tree)
+            + ["sh", "-c", _container_pytest_script(PYTEST_ARGS)],
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             timeout=RUN_TIMEOUT_S,
@@ -131,17 +150,18 @@ class DockerRunner:
 
 def _collect_node_ids(work_tree: Path, runner: Runner) -> frozenset[str]:
     """All test node IDs, via --collect-only -q (independent of pass/fail)."""
+    collect_args = ["--collect-only", "-q", "-p", "no:cacheprovider"]
     if isinstance(runner, DockerRunner):
-        cmd = ["docker", "run", "--rm", "-v", f"{work_tree.resolve()}:/work",
-               runner._image.tag, "sh", "-c",
-               "cd /work && python3 -m pytest --collect-only -q -p no:cacheprovider"]
+        cmd = _docker_base(runner._image, work_tree) + [
+            "sh", "-c", _container_pytest_script(collect_args)]
         proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
                               timeout=RUN_TIMEOUT_S, check=False, text=True)
     else:
         env = dict(os.environ)
         env["PYTHONPATH"] = _pythonpath_for(work_tree)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
         proc = subprocess.run(
-            ["python3", "-m", "pytest", "--collect-only", "-q", "-p", "no:cacheprovider"],
+            ["python3", "-m", "pytest", *collect_args],
             cwd=str(work_tree), env=env, stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL, timeout=RUN_TIMEOUT_S, check=False, text=True,
         )
