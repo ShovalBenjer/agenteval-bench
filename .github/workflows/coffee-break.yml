@@ -26,6 +26,9 @@ jobs:
           python-version: "3.12"
       - name: Run coffee-break deliberation
         env:
+          # Keep double-quoted: the fallback literal contains ': ', which is
+          # illegal in a YAML plain scalar and would silently disable this
+          # whole workflow (GitHub then records a 0-job failure run per push).
           TOPIC: "${{ inputs.topic || github.event.issue.title || 'open brainstorm: current blockers' }}"
           TOPIC_BODY: ${{ github.event.issue.body || '' }}
           JEV_MODEL_TOKEN: ${{ secrets.JEV_MODEL_TOKEN }}
