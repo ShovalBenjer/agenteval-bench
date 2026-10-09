@@ -3,6 +3,9 @@
 > Living roadmap. Vision, quarterly objectives, key results, dependency graph, and
 > risk register. Completed work is archived in [`docs/archive/roadmap-archive.md`](docs/archive/roadmap-archive.md).
 > Current release: **v0.1.0** (deterministic core shipped).
+> Status as of 2026-10-09: **v0.2 not yet shipped** — no LLM-as-judge, `compare`,
+> or `report` in the tree; zero releases published. v0.1 shipped, v0.2 in progress,
+> v0.3 planned.
 
 ---
 
@@ -33,7 +36,7 @@ regression-tracked quality gates.
   - KR2: `agenteval-bench run --ci --threshold` fails builds below threshold. ✅
   - KR3: Repo's own CI is green and gates on a golden replay suite. ✅
 
-### Q3 2026 — Intelligence & Regression (v0.2) 🎯 IN PROGRESS
+### Q3–Q4 2026 — Intelligence & Regression (v0.2) 🎯 IN PROGRESS
 
 - **Objective:** Add LLM-as-judge scoring, run-over-run regression, and reporting.
 - **Key Results:**
