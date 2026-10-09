@@ -3,9 +3,6 @@
 > Living roadmap. Vision, quarterly objectives, key results, dependency graph, and
 > risk register. Completed work is archived in [`docs/archive/roadmap-archive.md`](docs/archive/roadmap-archive.md).
 > Current release: **v0.1.0** (deterministic core shipped).
-> Status as of 2026-10-09: **v0.2 not yet shipped** — no LLM-as-judge, `compare`,
-> or `report` in the tree; zero releases published. v0.1 shipped, v0.2 in progress,
-> v0.3 planned.
 
 ---
 
@@ -89,13 +86,13 @@ Legend: ✅ shipped · 🎯 in progress · 🔜 planned.
 
 ## Open Workstreams
 
-- [ ] LLM-as-judge scoring with configurable judge model *(v0.2)*
-- [ ] `agenteval-bench compare` for run-over-run regression diffs *(v0.2)*
-- [ ] Report generation (markdown + JSON) *(v0.2)*
-- [ ] Enforce `cost_bound` with dry-run estimate *(v0.2)*
-- [ ] typer-based CLI with rich output *(v0.3)*
-- [ ] Plugin system for custom scorers *(v0.3)*
-- [ ] Dashboard for historical eval results *(v0.3)*
+- [ ] LLM-as-judge scoring with configurable judge model *(v0.2)* — spec: LLM-as-judge scoring
+- [ ] `agenteval-bench compare` for run-over-run regression diffs *(v0.2)* — spec: `compare` regression
+- [ ] Report generation (markdown + JSON) *(v0.2)* — spec: `report` (md + json)
+- [ ] Enforce `cost_bound` with dry-run estimate *(v0.2)* — spec: `cost_bound` enforced
+- [ ] typer-based CLI with rich output *(v0.3)* — spec: typer CLI + rich output
+- [ ] Plugin system for custom scorers *(v0.3)* — spec: Custom scorer plugins
+- [ ] Dashboard for historical eval results *(v0.3)* — spec: Historical dashboard
 
 ## Operations
 

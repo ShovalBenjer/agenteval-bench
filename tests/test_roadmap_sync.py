@@ -1,8 +1,13 @@
 """Roadmap/spec consistency enforcement (issue #16).
 
-The roadmap (`TODO.md`) must stay in sync with `docs/spec.md` and its own
-links must resolve. Prose is not enforcement: these invariants run in CI so
-roadmap drift fails the build instead of rotting silently.
+Generative invariants: sync obligations are declared IN the docs; the test
+enumerates and resolves them. Adding an Open Workstream bullet without a
+`spec:` anchor fails CI — docs authors, not test authors, own the extension.
+
+Accepted coupling: a `spec:` anchor names a feature-table row's first-column
+text in docs/spec.md. If a spec author rewords that row, the build fails with
+a message naming the bullet and the anchor — the fix is a docs edit, never
+test surgery.
 """
 
 from __future__ import annotations
@@ -14,63 +19,120 @@ REPO_ROOT: Path = Path(__file__).resolve().parents[1]
 ROADMAP: Path = REPO_ROOT / "TODO.md"
 SPEC: Path = REPO_ROOT / "docs" / "spec.md"
 
-# (roadmap workstream keyword, spec feature-table row keyword).
-# Every open workstream must have a counterpart in the spec's feature table.
-WORKSTREAM_SPEC_PAIRS: tuple[tuple[str, str], ...] = (
-    ("LLM-as-judge", "LLM-as-judge scoring"),
-    ("agenteval-bench compare", "`compare` regression"),
-    ("Report generation", "`report` (md + json)"),
-    ("cost_bound", "`cost_bound` enforced"),
-    ("typer-based CLI", "typer CLI + rich output"),
-    ("Plugin system", "Custom scorer plugins"),
-    ("Dashboard", "Historical dashboard"),
+# "- [ ] Title *(v0.2)* — spec: Anchor text". The anchor is the first-column
+# text of the corresponding feature row in docs/spec.md (backticks ignored).
+WORKSTREAM_RE: re.Pattern[str] = re.compile(
+    r"^-\s+\[[ xX]\]\s+(?P<title>.+?)\s+—\s+spec:\s*(?P<anchor>.+?)\s*$"
 )
+BULLET_RE: re.Pattern[str] = re.compile(r"^-\s+\[[ xX]\]\s+\S")
 
-# Markdown links like [text](target); excludes http(s)/mailto links.
-LINK_RE: re.Pattern[str] = re.compile(r"\[[^\]]*\]\(([^)#\s][^)\s]*)\)")
+# Inline links [text](target); the target may carry a #fragment.
+LINK_RE: re.Pattern[str] = re.compile(r"\[[^\]]*\]\((?P<target>[^)\s]+)\)")
+HEADING_RE: re.Pattern[str] = re.compile(r"^#{1,6}\s+(?P<title>.+?)\s*$")
+SCHEME_RE: re.Pattern[str] = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*:")
+
+
+def _norm(text: str) -> str:
+    """Normalize doc text for comparison: drop backticks, collapse whitespace."""
+    return re.sub(r"\s+", " ", text.replace("`", "")).strip()
 
 
 def _section(text: str, heading: str) -> str:
-    """Return the body of the markdown section under `heading`."""
-    match = re.search(rf"^## {re.escape(heading)}\s*$([\s\S]*?)(?=^## |\Z)", text, re.MULTILINE)
-    assert match is not None, f"missing section: {heading}"
+    match = re.search(
+        rf"^## {re.escape(heading)}\s*$([\s\S]*?)(?=^## |\Z)", text, re.MULTILINE
+    )
+    assert match is not None, f"missing section '## {heading}' in TODO.md"
     return match.group(1)
 
 
-def test_roadmap_links_resolve() -> None:
-    """Every relative markdown link in TODO.md resolves to a repo path."""
-    text: str = ROADMAP.read_text(encoding="utf-8")
-    targets: list[str] = [
-        t for t in LINK_RE.findall(text) if not re.match(r"^(https?|mailto):", t)
-    ]
-    assert targets, "TODO.md has no relative links to check"
-    missing: list[str] = [
-        t for t in targets if not (REPO_ROOT / t).exists()
-    ]
-    assert not missing, f"TODO.md links to missing paths: {missing}"
+def _workstream_bullets() -> list[str]:
+    section = _section(ROADMAP.read_text(encoding="utf-8"), "Open Workstreams")
+    return [line for line in section.splitlines() if BULLET_RE.match(line)]
 
 
-def test_workstreams_synced_with_spec() -> None:
-    """Each open workstream has a matching feature row in docs/spec.md."""
-    roadmap: str = ROADMAP.read_text(encoding="utf-8")
-    spec: str = SPEC.read_text(encoding="utf-8")
-    workstreams: str = _section(roadmap, "Open Workstreams")
-    for roadmap_key, spec_key in WORKSTREAM_SPEC_PAIRS:
-        assert roadmap_key in workstreams, (
-            f"roadmap lost workstream {roadmap_key!r}; update the pairs or the roadmap"
-        )
-        assert spec_key in spec, (
-            f"spec.md missing feature-table row {spec_key!r} "
-            f"for roadmap workstream {roadmap_key!r}"
+def _spec_row_first_columns() -> set[str]:
+    """First-column cell texts of every markdown table in docs/spec.md."""
+    cols: set[str] = set()
+    for line in SPEC.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|"):
+            continue
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 2 or set(cells[0]) <= {"-", ":"}:
+            continue
+        cols.add(_norm(cells[0]))
+    return cols
+
+
+def _heading_slugs(text: str) -> set[str]:
+    slugs: set[str] = set()
+    for line in text.splitlines():
+        m = HEADING_RE.match(line)
+        if not m:
+            continue
+        title = re.sub(r"<[^>]+>", "", m.group("title"))
+        slugs.add(re.sub(r"[^\w\s-]", "", title.lower()).replace(" ", "-"))
+    return slugs
+
+
+def test_every_workstream_declares_spec_anchor() -> None:
+    bullets = _workstream_bullets()
+    assert bullets, "Open Workstreams has no bullets to check"
+    missing = [b for b in bullets if not WORKSTREAM_RE.match(b)]
+    assert not missing, (
+        "Open Workstream bullets must end with '— spec: <anchor>' naming the "
+        "docs/spec.md feature row; missing on:\n" + "\n".join(missing)
+    )
+
+
+def test_spec_anchors_resolve() -> None:
+    rows = _spec_row_first_columns()
+    assert rows, "docs/spec.md has no markdown tables to resolve anchors against"
+    for bullet in _workstream_bullets():
+        m = WORKSTREAM_RE.match(bullet)
+        if m is None:
+            # No anchor declared: reported by
+            # test_every_workstream_declares_spec_anchor; skip here.
+            continue
+        anchor = _norm(m.group("anchor"))
+        title = m.group("title")
+        assert anchor in rows, (
+            f"TODO.md workstream {title!r} declares spec anchor {anchor!r}, but no "
+            "table row in docs/spec.md starts with that text. Update the '— spec:' "
+            "field or the spec row."
         )
 
 
 def test_no_stale_done_workstreams() -> None:
-    """Workstreams marked shipped in the roadmap belong in the archive."""
-    roadmap: str = ROADMAP.read_text(encoding="utf-8")
-    workstreams: str = _section(roadmap, "Open Workstreams")
-    shipped: list[str] = re.findall(r"✅|DONE", workstreams)
+    section = _section(ROADMAP.read_text(encoding="utf-8"), "Open Workstreams")
+    shipped = re.findall(r"✅|\bDONE\b", section)
     assert not shipped, (
-        "Open Workstreams contains shipped markers; move them to "
+        "Open Workstreams contains shipped markers; move finished items to "
         "docs/archive/roadmap-archive.md"
+    )
+
+
+def test_roadmap_links_resolve() -> None:
+    text = ROADMAP.read_text(encoding="utf-8")
+    slugs = _heading_slugs(text)
+    targets = LINK_RE.findall(text)
+    assert targets, "TODO.md has no links to check"
+    bad: list[str] = []
+    for target in targets:
+        if SCHEME_RE.match(target):  # https:, mailto:, ftp:, ...
+            continue
+        path_part, _, fragment = target.partition("#")
+        if path_part:
+            candidate = REPO_ROOT / path_part.lstrip("/")
+            if not candidate.exists():
+                bad.append(target)
+        elif fragment and fragment not in slugs:
+            bad.append(target)
+    assert not bad, f"TODO.md links to missing targets: {bad}"
+
+
+def test_operations_section_names_spec_sync() -> None:
+    ops = _section(ROADMAP.read_text(encoding="utf-8"), "Operations")
+    assert "docs/spec.md" in ops, (
+        "Operations must carry the living 'keep in sync with docs/spec.md' obligation"
     )
