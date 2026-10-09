@@ -27,6 +27,7 @@ from experiment.alpha_spend import (
     group_sequential_boundaries,
     inv_normal_cdf,
     obrien_fleming_spend,
+    spending_report,
 )
 from experiment.cuped import CovariateViolation, CupedResult, cuped_adjust
 from experiment.registry import (
@@ -60,5 +61,6 @@ __all__ = [
     "load_plan",
     "obrien_fleming_spend",
     "register_plan",
+    "spending_report",
     "verify_experiment",
 ]

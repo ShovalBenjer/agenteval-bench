@@ -19,6 +19,16 @@ boundaries ~(2.96, 1.97) (secondary-only oracle), while two-sided
 alpha=0.05 gives ~(2.77, ~1.97). Both control their nominal level; the
 difference is the tested hypothesis, not correctness.
 
+Numerical note (grid quantization): boundaries are solved on a fixed
+Simpson grid, so the exit-probability function is a step function of
+the boundary — it only changes when the boundary crosses a grid point.
+Each boundary is therefore resolved to half a grid cell (~0.008 at the
+default 1200-point grid), and the bisection converges to the step edge,
+which sits systematically just below the continuous solution (the
+liberal side). Realized per-look exit probabilities exceed the spending
+targets by up to ~density*h. All contract tolerances absorb this, and
+the Monte Carlo test pins the realized exits by an independent method.
+
 All functions are pure and deterministic.
 """
 
@@ -33,6 +43,12 @@ from experiment.types import ExperimentPlan, Sides
 
 class PeekRefused(ValueError):
     """An interim analysis was attempted outside the pre-registered look schedule."""
+
+
+#: Default Simpson grid resolution for the boundary solver. Finer grids
+#: shrink the quantization floor (see module docstring); the solve is
+#: cached per (looks, alpha, sides) so this is a one-time cost.
+_GRID_N = 1200
 
 
 def _phi(z: float) -> float:
@@ -190,7 +206,7 @@ def group_sequential_boundaries(
     sides: Sides = "two",
     *,
     zmax: float = 10.0,
-    grid_n: int = 600,
+    grid_n: int = _GRID_N,
 ) -> tuple[float, ...]:
     """O'Brien-Fleming alpha-spending boundaries for the look schedule.
 
@@ -215,7 +231,7 @@ def spending_report(
     looks: tuple[float, ...], alpha: float, sides: Sides = "two"
 ) -> list[tuple[float, float, float]]:
     """Per-look (information fraction, boundary, incremental alpha spent)."""
-    boundaries, cum = _solve(looks, alpha, sides, zmax=10.0, grid_n=600)
+    boundaries, cum = _solve(looks, alpha, sides, zmax=10.0, grid_n=_GRID_N)
     rows = []
     prev = 0.0
     for t, b, c in zip(looks, boundaries, cum):
@@ -236,19 +252,25 @@ class LookDecision:
 
 
 class SequentialGate:
-    """Enforces a pre-registered group-sequential stopping rule.
+    """Enforces the pre-registered look schedule for interim analyses.
 
     Looks must be requested in registered order, each exactly once.
     Anything else — an unregistered fraction, a repeat, an out-of-order
-    look — raises PeekRefused. This is the running no-peeking check:
-    the only way to see interim results is through the spending schedule
-    the experiment pre-registered.
+    look — raises PeekRefused, and the accept/reject decision is
+    re-derived from the z-statistic against the alpha-spending boundary.
+
+    Honesty note: the gate is per-instance and its state is not
+    persisted or audited. It cannot *prevent* peeking by a caller who
+    never uses it — what it provides is the only *verifiable* path:
+    `verify_experiment` blesses only evidence whose looks replay cleanly
+    through the registered schedule. A peek outside the gate leaves no
+    trace the seam can see; the registry binds the plan, not the data.
     """
 
     def __init__(self, plan: ExperimentPlan) -> None:
         self._plan = plan
         self._boundaries, self._cum = _solve(
-            plan.looks, plan.alpha, plan.sides, zmax=10.0, grid_n=600
+            plan.looks, plan.alpha, plan.sides, zmax=10.0, grid_n=_GRID_N
         )
         self._taken: list[float] = []
 

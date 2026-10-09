@@ -120,9 +120,10 @@ class TestAlphaSpending:
         assert 1.9 < b[-1] < 2.1  # near-nominal at the final look
 
     def test_exit_increments_match_spending(self):
-        # The solver's defining property: each look's incremental exit
-        # probability equals the spending increment. Tests the recursive
-        # integration and the bisection jointly.
+        # Pins the spending arithmetic behind spending_report (cumulative
+        # exits are built from spending increments by construction). This
+        # does NOT test the boundary solver — the Monte Carlo test below
+        # is the independent pin of the solved boundaries.
         looks = (0.5, 1.0)
         rows = spending_report(looks, 0.05)
         prev_spent = 0.0
@@ -134,6 +135,32 @@ class TestAlphaSpending:
     def test_total_exit_equals_alpha(self):
         rows = spending_report((1 / 3, 2 / 3, 1.0), 0.05)
         assert sum(inc for _, _, inc in rows) == pytest.approx(0.05, abs=2e-3)
+
+    def test_solver_exits_match_spending_monte_carlo(self):
+        # Independent pin of the boundary SOLVER: simulate the canonical
+        # joint distribution of sequential z-statistics directly (no
+        # grid, no bisection — a different code path from the solver)
+        # and check the realized per-look exit fractions match the
+        # spending increments. A subtly wrong integration fails here.
+        rng = random.Random(1234)
+        looks = (0.5, 1.0)
+        b = group_sequential_boundaries(looks, 0.05)  # two-sided
+        n = 200000
+        e1 = e2 = 0
+        r = math.sqrt(0.5)
+        s = math.sqrt(0.5)
+        for _ in range(n):
+            z1 = rng.gauss(0.0, 1.0)
+            z2 = r * z1 + s * rng.gauss(0.0, 1.0)
+            if abs(z1) >= b[0]:
+                e1 += 1
+            elif abs(z2) >= b[1]:
+                e2 += 1
+        # Spending increments: 0.00557 at t=0.5, 0.04443 at t=1.0.
+        # Bands are ~6-12 sigma (seeded, deterministic) — wide enough
+        # for grid quantization, tight enough to catch a broken solver.
+        assert e1 / n == pytest.approx(0.00557, abs=0.002)
+        assert e2 / n == pytest.approx(0.04443, abs=0.003)
 
 
 # ---------------------------------------------------------------------------

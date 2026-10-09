@@ -140,6 +140,16 @@ exits non-zero unless every refusal fires and the compliant paths
   before the run starts — not cryptography.
 - `CUPED_REQUIRED` is presence plus coverage (arm n's sum to n_final),
   not a check that the adjustment used the experiment's actual data.
+- Look fractions are compared **exactly** (no tolerance): the plan
+  declares constants like `(0.5, 1.0)` and evidence must repeat those
+  literals. A fraction computed arithmetically (e.g. `n_so_far /
+  n_planned` for a non-dyadic schedule) risks a false `PeekRefused` —
+  reuse the registered literal. Exactness is deliberate: tolerance would
+  let a peek at 0.4999 masquerade as the registered 0.5.
+- The registry is a **single-writer** file: concurrent `register_plan`
+  calls can chain to the same stale predecessor, and the next read
+  fails the whole file closed (`RegistryCorrupted`). One writer, or
+  serialize externally.
 - The OF-like spending function keeps its two-sided form even for
   one-sided tests (the literature convention); one-sided alpha=0.025
   reproduces the tabulated K=2 boundaries (2.96, 1.97), two-sided

@@ -16,11 +16,6 @@ from typing import Literal
 #: One-sided (upper tail) or two-sided (|z|) sequential test.
 Sides = Literal["one", "two"]
 
-#: Alpha-spending functions supported. Only O'Brien-Fleming ships: it
-#: spends almost nothing early, which is the conservative choice for
-#: interim peeks at model comparisons.
-SpendingKind = Literal["obrien-fleming"]
-
 
 @dataclass(frozen=True)
 class CovariateSpec:
@@ -51,7 +46,6 @@ class ExperimentPlan:
     alpha: float = 0.05
     sides: Sides = "two"
     looks: tuple[float, ...] = (0.5, 1.0)
-    spending: SpendingKind = "obrien-fleming"
     covariate: CovariateSpec | None = None
     n_tolerance: float = 0.02
     min_n: int = 30

@@ -202,9 +202,9 @@ def main() -> int:
         naive_fwer, of_fwer = demo_peeking()
         print(f"null experiments: {N_EXP}, looks at t=0.5 and t=1.0, nominal alpha=0.05")
         print(f"  naive peeking FWER:      {naive_fwer:.4f}  (must exceed 0.07: peeking inflates)")
-        print(f"  OF alpha-spending FWER:  {of_fwer:.4f}  (must stay in [0.03, 0.07])")
+        print(f"  OF alpha-spending FWER:  {of_fwer:.4f}  (must stay in [0.035, 0.065])")
         assert naive_fwer > 0.07, f"peeking should inflate FWER, got {naive_fwer}"
-        assert 0.03 < of_fwer < 0.07, f"OF spending should control FWER, got {of_fwer}"
+        assert 0.035 < of_fwer < 0.065, f"OF spending should control FWER, got {of_fwer}"
 
         ratio, bias = demo_cuped()
         print(f"CUPED: variance ratio {ratio:.3f} (must be < 0.35), "

@@ -86,7 +86,6 @@ def _canonical_plan(plan: ExperimentPlan) -> Mapping[str, object]:
         "alpha": plan.alpha,
         "sides": plan.sides,
         "looks": list(plan.looks),
-        "spending": plan.spending,
         "covariate": (
             {"name": plan.covariate.name, "source": plan.covariate.source}
             if plan.covariate is not None
@@ -154,7 +153,6 @@ def load_plan(digest: str, registry_path: str) -> ExperimentPlan:
                 alpha=p["alpha"],
                 sides=p["sides"],
                 looks=tuple(p["looks"]),
-                spending=p["spending"],
                 covariate=(
                     CovariateSpec(name=cov["name"], source=cov["source"])
                     if cov is not None
