@@ -103,3 +103,46 @@ def test_out_of_range_threshold_low(monkeypatch, capsys):
         assert "threshold" in err.lower()
     finally:
         os.unlink(path)
+
+
+def test_bugsmith_requires_repo_and_out(monkeypatch, capsys):
+    code, _, err = _run(["bugsmith", "--repo", "x"], monkeypatch, capsys)
+    assert code == 1
+    assert "--repo" in err or "repo" in err.lower()
+
+
+def test_bugsmith_rejects_missing_repo(monkeypatch, capsys):
+    code, _, err = _run(
+        ["bugsmith", "--repo", "/nonexistent", "--out", "/tmp/x"],
+        monkeypatch, capsys,
+    )
+    assert code == 1
+    assert "not found" in err
+
+
+def test_bugsmith_end_to_end_local(monkeypatch, capsys, tmp_path):
+    import json
+    from pathlib import Path
+
+    repo = Path(__file__).resolve().parents[1] / "src" / "bugsmith" / "fixtures" / "target"
+    out = tmp_path / "bench"
+    code, stdout, _ = _run(
+        ["bugsmith", "--repo", str(repo), "--out", str(out),
+         "--procedural", "4", "--seed", "5", "--local"],
+        monkeypatch, capsys,
+    )
+    assert code == 0, stdout
+    manifest = json.loads((out / "manifest.json").read_text())
+    assert manifest["baseline_tests"] == 16
+    assert manifest["valid_instances"] >= 1
+    assert 1 <= len(manifest["curated"]) <= manifest["valid_instances"]
+    for name in manifest["curated"]:
+        inst = json.loads((out / f"{name}.json").read_text())
+        assert inst["fail_to_pass"], "curated instance must break >= 1 test"
+        assert inst["seed"] == 5
+
+
+def test_bugsmith_unknown_command(monkeypatch, capsys):
+    code, _, err = _run(["frobnicate"], monkeypatch, capsys)
+    assert code == 1
+    assert "Unknown command" in err

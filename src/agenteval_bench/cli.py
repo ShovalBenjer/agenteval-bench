@@ -394,6 +394,119 @@ def cmd_replay(args: list[str]) -> int:
     return 0
 
 
+def cmd_bugsmith(args: list[str]) -> int:
+    """Run the SWE-smith bug-injection pipeline (agenteval-bench#37).
+
+    generate -> validate (inside Docker unless --local) -> curate, writing
+    validated instances + a manifest to --out. Exit 0 only if at least one
+    valid instance survives validation.
+    """
+    import tempfile
+    from pathlib import Path
+
+    from bugsmith.buggen import PRMirrorGenerator, ProceduralBugGenerator
+    from bugsmith.curate import select_subset
+    from bugsmith.harness import DockerRunner, LocalRunner, baseline, validate
+    from bugsmith.images import build_image, repo_digest
+    from bugsmith.types import BugCandidate, BugsmithError, CurationConfig
+
+    args, repo_s = _flag(args, "--repo")
+    args, config_s = _flag(args, "--config")
+    args, out_s = _flag(args, "--out")
+    args, count_s = _flag(args, "--procedural", "8")
+    args, seed_s = _flag(args, "--seed", str(DEFAULT_SEED))
+    args, local = _has(args, "--local")
+    # --pr-mirror <patch>:<pr-ref>, repeatable
+    pr_mirrors: list[str] = []
+    rest: list[str] = []
+    i = 0
+    while i < len(args):
+        if args[i] == "--pr-mirror" and i + 1 < len(args):
+            pr_mirrors.append(args[i + 1])
+            i += 2
+        else:
+            rest.append(args[i])
+            i += 1
+    args = rest
+
+    if not repo_s or not out_s:
+        print("Error: bugsmith needs --repo <dir> --out <dir>", file=sys.stderr)
+        return 1
+    repo = Path(repo_s)
+    if not repo.is_dir():
+        print(f"Error: repo not found: {repo_s}", file=sys.stderr)
+        return 1
+    try:
+        count = int(count_s or "8")
+        seed = int(seed_s or str(DEFAULT_SEED))
+        if count < 1:
+            raise ValueError("count >= 1")
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    try:
+        config = CurationConfig(**json.loads(config_s)) if config_s else CurationConfig(seed=seed)
+    except (ValueError, TypeError, json.JSONDecodeError, BugsmithError) as e:
+        print(f"Error: invalid --config: {e}", file=sys.stderr)
+        return 1
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="bugsmith-") as tmp:
+            work_dir = Path(tmp)
+            if local:
+                runner: DockerRunner | LocalRunner = LocalRunner()
+                digest = repo_digest(repo)
+            else:
+                image = build_image(repo, work_dir)
+                runner = DockerRunner(image)
+                digest = image.repo_digest
+            passed = baseline(repo, runner, work_dir)
+            print(f"baseline: {len(passed)} tests passing")
+
+            candidates: list[BugCandidate] = ProceduralBugGenerator(seed).generate(repo, count)
+            for spec in pr_mirrors:
+                patch_path, _, pr_ref = spec.partition(":")
+                if not patch_path or not pr_ref:
+                    print(f"Error: --pr-mirror needs <patch>:<pr-ref>, got {spec!r}",
+                          file=sys.stderr)
+                    return 1
+                patch = Path(patch_path).read_text(encoding="utf-8")
+                candidates.extend(
+                    PRMirrorGenerator(pr_ref=pr_ref).generate(patch, ["mirrored"])
+                )
+            reports = [validate(c, repo, runner, work_dir, passed) for c in candidates]
+            valid = [r for r in reports if r.is_valid_instance]
+            print(f"validated: {len(valid)}/{len(reports)} instances break >= 1 test")
+            subset = select_subset(config, reports, digest)
+            print(f"curated: {len(subset)} instances")
+
+            out = Path(out_s)
+            out.mkdir(parents=True, exist_ok=True)
+            for inst in subset:
+                (out / f"{inst.instance_id}.json").write_text(
+                    json.dumps(inst.to_dict(), indent=2, sort_keys=True) + "\n",
+                    encoding="utf-8",
+                )
+            manifest = {
+                "tool": "agenteval-bench",
+                "command": "bugsmith",
+                "seed": seed,
+                "repo_digest": digest,
+                "baseline_tests": len(passed),
+                "candidates": len(candidates),
+                "valid_instances": len(valid),
+                "curated": [i.instance_id for i in subset],
+            }
+            (out / "manifest.json").write_text(
+                json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
+            )
+            print(f"wrote {len(subset)} instances + manifest -> {out}")
+            return 0 if valid else 1
+    except BugsmithError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+
+
 def main() -> None:
     """Minimal CLI — full argparse/typer in v0.2."""
     args = sys.argv[1:]
@@ -408,6 +521,9 @@ def main() -> None:
         print("                                [--q 0.05] [--seed 42] [--out report.json]")
         print("       agenteval-bench simpson --slices slices.json")
         print("                                [--allocation-tolerance 0.05] [--out report.json]")
+        print("       agenteval-bench bugsmith --repo <dir> --out <dir> [--procedural 8]")
+        print("                                [--seed 42] [--local] [--config curation.json]")
+        print("                                [--pr-mirror patch:pr-ref]")
         print("       (--seed is recorded for provenance; the test itself is deterministic)")
         return
 
@@ -422,6 +538,8 @@ def main() -> None:
         sys.exit(cmd_alt_test(rest))
     elif cmd == "simpson":
         sys.exit(cmd_simpson(rest))
+    elif cmd == "bugsmith":
+        sys.exit(cmd_bugsmith(rest))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
