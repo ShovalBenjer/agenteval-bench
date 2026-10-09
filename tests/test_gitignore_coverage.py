@@ -119,3 +119,84 @@ def test_all_issue18_artifact_classes_are_ignored() -> None:
 def test_no_overbroad_pattern_swallows_sources() -> None:
     ignored = _check_ignore(MUST_NOT_BE_IGNORED)
     assert not ignored, f"source files wrongly ignored: {sorted(ignored)}"
+
+
+# Basename/dirname glob patterns for artifact classes: anything a working tree
+# should never carry as an *unignored* entry. This is the tree-observation half
+# of issue #18's acceptance (`git status --ignored` shows expected categories,
+# no stray unignored artifacts) — unlike the pattern assertions above, it looks
+# at the actual tree, so a stray artifact dropped outside the ignored paths
+# fails the suite instead of passing silently.
+ARTIFACT_NAME_PATTERNS = [
+    "__pycache__",
+    "*.py[cod]",
+    "*$py.class",
+    "*.so",
+    "build",
+    "dist",
+    "*.egg-info",
+    "*.egg",
+    ".eggs",
+    "pip-wheel-metadata",
+    ".venv",
+    "venv",
+    "env",
+    ".pytest_cache",
+    ".coverage*",
+    "coverage.xml",
+    "htmlcov",
+    ".tox",
+    ".nox",
+    ".hypothesis",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".dmypy.json",
+    ".pyre",
+    ".pytype",
+    ".ipynb_checkpoints",
+    "site",
+    "reports",
+    "runs",
+    "*.report.json",
+    ".env*",
+    "*.pkl",
+    "*.log",
+    ".idea",
+    ".vscode",
+    "*.swp",
+    "*.swo",
+    "*~",
+    ".DS_Store",
+    "Thumbs.db",
+    "Desktop.ini",
+]
+
+
+def _untracked_unignored() -> list[str]:
+    """Untracked, unignored paths in the working tree (the stray-artifact set)."""
+    proc = subprocess.run(
+        ["git", "-C", str(REPO_ROOT), "ls-files", "--others", "--exclude-standard"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return [line for line in proc.stdout.splitlines() if line]
+
+
+def test_no_stray_unignored_artifacts_in_tree() -> None:
+    import fnmatch
+
+    def _looks_like_artifact(path: str) -> bool:
+        parts = Path(path).parts
+        return any(
+            fnmatch.fnmatchcase(part, pattern)
+            for part in parts
+            for pattern in ARTIFACT_NAME_PATTERNS
+        )
+
+    strays = [p for p in _untracked_unignored() if _looks_like_artifact(p)]
+    assert not strays, (
+        "stray unignored artifacts in working tree "
+        "(issue #18: these should be covered by .gitignore): "
+        f"{sorted(strays)}"
+    )
