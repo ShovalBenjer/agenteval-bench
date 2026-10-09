@@ -33,7 +33,7 @@ regression-tracked quality gates.
   - KR2: `agenteval-bench run --ci --threshold` fails builds below threshold. ✅
   - KR3: Repo's own CI is green and gates on a golden replay suite. ✅
 
-### Q3 2026 — Intelligence & Regression (v0.2) 🎯 IN PROGRESS
+### Q3–Q4 2026 — Intelligence & Regression (v0.2) 🎯 IN PROGRESS
 
 - **Objective:** Add LLM-as-judge scoring, run-over-run regression, and reporting.
 - **Key Results:**
@@ -86,13 +86,13 @@ Legend: ✅ shipped · 🎯 in progress · 🔜 planned.
 
 ## Open Workstreams
 
-- [ ] LLM-as-judge scoring with configurable judge model *(v0.2)*
-- [ ] `agenteval-bench compare` for run-over-run regression diffs *(v0.2)*
-- [ ] Report generation (markdown + JSON) *(v0.2)*
-- [ ] Enforce `cost_bound` with dry-run estimate *(v0.2)*
-- [ ] typer-based CLI with rich output *(v0.3)*
-- [ ] Plugin system for custom scorers *(v0.3)*
-- [ ] Dashboard for historical eval results *(v0.3)*
+- [ ] LLM-as-judge scoring with configurable judge model *(v0.2)* — spec: LLM-as-judge scoring
+- [ ] `agenteval-bench compare` for run-over-run regression diffs *(v0.2)* — spec: `compare` regression
+- [ ] Report generation (markdown + JSON) *(v0.2)* — spec: `report` (md + json)
+- [ ] Enforce `cost_bound` with dry-run estimate *(v0.2)* — spec: `cost_bound` enforced
+- [ ] typer-based CLI with rich output *(v0.3)* — spec: typer CLI + rich output
+- [ ] Plugin system for custom scorers *(v0.3)* — spec: Custom scorer plugins
+- [ ] Dashboard for historical eval results *(v0.3)* — spec: Historical dashboard
 
 ## Operations
 
