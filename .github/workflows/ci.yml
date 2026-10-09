@@ -23,3 +23,5 @@ jobs:
         run: pytest tests/ -v --tb=short
       - name: Eval gate (golden replay suite)
         run: agenteval-bench run --suite examples/support-agent.yaml --ci --threshold 0.9
+      - name: Experiment-discipline demo (violations must fail)
+        run: PYTHONPATH=src python -m experiment.demo
