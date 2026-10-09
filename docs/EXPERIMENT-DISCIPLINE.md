@@ -200,3 +200,18 @@ PYTHONPATH=src python -m experiment.demo_simpson
 
 It exits nonzero unless the reversal is named, the win claim is
 rejected, and all refusal drills fire. CI runs it directly.
+
+The harness also refuses from the command line — this is the runnable
+refusal path, not just the library seam:
+
+```bash
+agenteval-bench simpson --slices slices.json [--allocation-tolerance 0.05] [--out report.json]
+```
+
+`slices.json` carries the per-stratum counts plus the claimed pooled arm
+totals. The command prints the mandatory per-stratum disaggregation on
+every path and exits 0 only if the pooled "treated wins" claim survives;
+exit 1 names the violations (`ALLOCATION_SHIFT`, `SIMPSON_REVERSAL`,
+`NON_EXHAUSTIVE_DECOMPOSITION`), exit 2 is unusable input. `--out`
+writes the machine-readable verdict. Gate model-comparison reports on
+this command in CI.

@@ -227,6 +227,116 @@ def cmd_alt_test(args: list[str]) -> int:
     return 0
 
 
+def cmd_simpson(args: list[str]) -> int:
+    """Rule on a "treated beats control overall" claim from per-slice aggregates.
+
+    Reads a JSON doc of per-stratum counts (periods, segments, task
+    categories), prints the mandatory per-stratum disaggregation, and
+    exits 0 only if the pooled win claim survives Simpson-safe
+    aggregation (agenteval-bench#36). Exit 1 = claim REJECTED or pooled
+    reporting refused (violations named); exit 2 = unusable input.
+
+    Input schema:
+      {"strata": [{"name", "n_treated", "n_control",
+                   "treated_successes", "control_successes"}],
+       "pooled_n_treated": int, "pooled_n_control": int,
+       "allocation_tolerance": float (optional)}
+    """
+    from experiment.simpson import (
+        DEFAULT_ALLOCATION_TOLERANCE,
+        Stratum,
+        win_claim,
+    )
+
+    args, slices_path = _flag(args, "--slices")
+    args, tol_s = _flag(args, "--allocation-tolerance")
+    args, out = _flag(args, "--out")
+    if not slices_path:
+        print("Error: simpson needs --slices <file.json>", file=sys.stderr)
+        return 2
+    try:
+        with open(slices_path, encoding="utf-8") as f:
+            doc = json.load(f)
+        strata = tuple(
+            Stratum(
+                name=s["name"],
+                n_treated=s["n_treated"],
+                n_control=s["n_control"],
+                treated_successes=s["treated_successes"],
+                control_successes=s["control_successes"],
+            )
+            for s in doc["strata"]
+        )
+        tolerance = (
+            float(tol_s) if tol_s is not None
+            else float(doc.get("allocation_tolerance", DEFAULT_ALLOCATION_TOLERANCE))
+        )
+    except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as e:
+        print(f"Error: invalid slices doc: {e}", file=sys.stderr)
+        return 2
+    try:
+        pooled_n_treated = int(doc["pooled_n_treated"])
+        pooled_n_control = int(doc["pooled_n_control"])
+    except (KeyError, TypeError, ValueError) as e:
+        print(f"Error: pooled arm totals required: {e}", file=sys.stderr)
+        return 2
+
+    verdict = win_claim(
+        strata, pooled_n_treated, pooled_n_control, allocation_tolerance=tolerance
+    )
+    rep = verdict.report
+    lines = ["per-stratum disaggregation (mandatory):"]
+    for r in rep.strata:
+        lines.append(
+            f"  {r.name}: treated {r.treated_rate:.2%} "
+            f"(n={r.n_treated}, share={r.treated_share:.1%}) vs "
+            f"control {r.control_rate:.2%} (n={r.n_control}) "
+            f"-> delta {r.delta:+.2%}"
+        )
+    lines.append(
+        f"pooled: treated {rep.pooled_treated_rate:.2%} vs "
+        f"control {rep.pooled_control_rate:.2%} "
+        f"-> delta {rep.pooled_delta:+.2%}"
+    )
+    if verdict.accepted:
+        lines.append("verdict: WIN CLAIM ACCEPTED")
+    else:
+        lines.append(
+            "verdict: WIN CLAIM REJECTED "
+            f"({', '.join(verdict.violations) or 'pooled numbers do not favor treated'})"
+        )
+        for note in verdict.notes:
+            lines.append(f"  note: {note}")
+    print("\n".join(lines))
+    if out:
+        payload = {
+            "tool": "agenteval-bench",
+            "command": "simpson",
+            "accepted": verdict.accepted,
+            "violations": list(verdict.violations),
+            "notes": list(verdict.notes),
+            "strata": [
+                {
+                    "name": r.name,
+                    "n_treated": r.n_treated,
+                    "n_control": r.n_control,
+                    "treated_share": r.treated_share,
+                    "treated_rate": r.treated_rate,
+                    "control_rate": r.control_rate,
+                    "delta": r.delta,
+                }
+                for r in rep.strata
+            ],
+            "pooled_treated_rate": rep.pooled_treated_rate,
+            "pooled_control_rate": rep.pooled_control_rate,
+            "pooled_delta": rep.pooled_delta,
+        }
+        with open(out, "w", encoding="utf-8") as f:
+            f.write(json.dumps(payload, sort_keys=True, indent=2) + "\n")
+        print(f"Report: {out}")
+    return 0 if verdict.accepted else 1
+
+
 def cmd_replay(args: list[str]) -> int:
     """Verify a replay log is bit-exact: re-run and byte-compare."""
     args, log_path = _flag(args, "--log")
@@ -282,6 +392,8 @@ def main() -> None:
         print("       agenteval-bench replay --log replay.json --suite <file> [--check]")
         print("       agenteval-bench alt-test --data annotations.jsonl [--epsilon 0.1]")
         print("                                [--q 0.05] [--seed 42] [--out report.json]")
+        print("       agenteval-bench simpson --slices slices.json")
+        print("                                [--allocation-tolerance 0.05] [--out report.json]")
         print("       (--seed is recorded for provenance; the test itself is deterministic)")
         return
 
@@ -294,6 +406,8 @@ def main() -> None:
         sys.exit(cmd_replay(rest))
     elif cmd == "alt-test":
         sys.exit(cmd_alt_test(rest))
+    elif cmd == "simpson":
+        sys.exit(cmd_simpson(rest))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
