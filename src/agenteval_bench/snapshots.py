@@ -5,14 +5,21 @@ Every established benchmark set is an immutable, versioned snapshot on disk.
 ``<root>/<suite-name>/<version-id>/`` (``suite.json`` + ``manifest.json``)
 and refuses to overwrite an existing version id — writes are append-only
 through this API. ``SnapshotStore.load`` hash-verifies the stored bytes
-against the manifest digest and raises :class:`SnapshotCorrupted` on any
-on-disk mutation.
+against the manifest digest and cross-checks the manifest's semantic
+content (baseline, version metadata) against a hash-chained publish
+journal; any mismatch raises :class:`SnapshotCorrupted`.
 
 Honesty boundary: append-only through the API is enforcement (the store
 itself never mutates a version); protection against out-of-band mutation
 (``rm``, manual edits) is *detection*, not prevention — a tampered version
-fails closed at load time with the offending path named. Detection is the
-strongest guarantee a single-machine file layout can honestly offer.
+fails closed at load time with the offending path named. The journal
+detects silent rewrites of the manifest's release-gate inputs (baseline
+scores, version metadata) that a suite-bytes hash alone would miss.
+Detection is the strongest guarantee a single-machine file layout can
+honestly offer: a party with full write access to the store directory
+could rewrite store + journal together, so the journal is tamper-*evidence*
+against partial/accidental mutation, not Byzantine tamper-*proofing*.
+Committing the store to version control is the outer trust anchor.
 
 Each version's manifest records what changed from the previous version and
 why (owner, update cadence, regression set, feedback loop), forming an
@@ -22,6 +29,7 @@ its predecessor.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -42,6 +50,18 @@ from agenteval_bench.models import (
 from agenteval_bench.replay import suite_digest
 
 SNAPSHOT_FORMAT = 1
+JOURNAL_GENESIS = "GENESIS"
+
+
+def _canonical_json(obj: Any) -> bytes:
+    """Canonical JSON bytes (same style as suite canonical form)."""
+    return (json.dumps(obj, sort_keys=True, indent=2, ensure_ascii=False) + "\n").encode(
+        "utf-8"
+    )
+
+
+def _sha256_hex(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
 
 
 class SnapshotError(Exception):
@@ -80,6 +100,10 @@ class VersionMeta:
             "regression_set": self.regression_set,
             "feedback_loop": self.feedback_loop,
         }
+
+    def __post_init__(self) -> None:
+        if not self.owner or not self.why:
+            raise ValueError("VersionMeta requires non-empty owner and why")
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> VersionMeta:
@@ -357,11 +381,20 @@ class SnapshotStore:
         return self._suite_dir(suite_name) / version_id
 
     @staticmethod
+    def _check_path_segment(segment: str, what: str) -> None:
+        if not segment or not isinstance(segment, str):
+            raise SnapshotError(f"{what} must be a non-empty string")
+        if segment in (".", "..") or "/" in segment or "\\" in segment:
+            raise SnapshotError(f"{what} {segment!r} is not a safe path segment")
+        if segment.startswith("."):
+            raise SnapshotError(
+                f"{what} {segment!r} must not start with '.' "
+                "(dot-directories are hidden from listing/verification)"
+            )
+
+    @staticmethod
     def _check_version_id(version_id: str) -> None:
-        if not version_id or not isinstance(version_id, str):
-            raise SnapshotError("version_id must be a non-empty string")
-        if version_id in (".", "..") or "/" in version_id or "\\" in version_id:
-            raise SnapshotError(f"version_id {version_id!r} is not a safe path segment")
+        SnapshotStore._check_path_segment(version_id, "version_id")
 
     # -- publish ---------------------------------------------------------
     def publish(
@@ -383,6 +416,7 @@ class SnapshotStore:
         must be unbroken.
         """
         self._check_version_id(version_id)
+        self._check_path_segment(suite.name, "suite name")
         vdir = self._version_dir(suite.name, version_id)
         if vdir.exists():
             raise VersionExistsError(
@@ -399,6 +433,22 @@ class SnapshotStore:
 
         suite_bytes = suite_to_canonical(suite)
         digest = suite_digest(suite_bytes)
+        # Publish enforces exactly what load enforces. A suite that would
+        # fail the schema or canonical fixed-point check at load (duplicate
+        # case ids, non-normalized types) is rejected HERE — otherwise the
+        # version id would be bricked: unloadable and unrepublishable.
+        try:
+            probe = suite_from_canonical(suite_bytes)
+        except SnapshotCorrupted as e:
+            raise SnapshotError(
+                f"suite {suite.name!r} failed pre-publish validation: {e}"
+            ) from e
+        if suite_to_canonical(probe) != suite_bytes:
+            raise SnapshotError(
+                f"suite {suite.name!r} is not canonical-stable "
+                "(check declared dataclass types, e.g. float weights) — "
+                "refusing to publish an unloadable version"
+            )
         created = created_at or datetime.now(UTC).isoformat()
         manifest: dict[str, Any] = {
             "tool": "agenteval-bench",
@@ -419,18 +469,51 @@ class SnapshotStore:
 
         # Stage in a temp dir inside the suite dir, then atomically rename —
         # a crash mid-publish never leaves a half-written version under its
-        # final id.
+        # final id. The version id is claimed EXCLUSIVELY via mkdir before
+        # staging: the exists() check above is a fast path, but the mkdir is
+        # the atomic gate — two concurrent publishers of the same id cannot
+        # both succeed (TOCTOU closed).
         self._suite_dir(suite.name).mkdir(parents=True, exist_ok=True)
+        # Drop crash-orphaned staging dirs for this version id (a SIGKILL
+        # between mkdtemp and os.replace leaves them; they are hidden from
+        # listing/verification by design, so clean them here, never silently).
+        staging_prefix = f".{version_id}."
+        for child in self._suite_dir(suite.name).iterdir():
+            if child.is_dir() and child.name.startswith(staging_prefix):
+                shutil.rmtree(child, ignore_errors=True)
+        try:
+            vdir.mkdir(exist_ok=False)
+        except FileExistsError:
+            raise VersionExistsError(
+                f"version {version_id!r} of suite {suite.name!r} already exists — "
+                "versions are immutable; publish a new version id instead"
+            ) from None
         staging = Path(
             tempfile.mkdtemp(prefix=f".{version_id}.", dir=self._suite_dir(suite.name))
         )
         try:
             (staging / "suite.json").write_bytes(suite_bytes)
             (staging / "manifest.json").write_bytes(manifest_bytes)
+            # vdir is an empty dir we own: rename replaces it atomically.
             os.replace(staging, vdir)
         except BaseException:
             shutil.rmtree(staging, ignore_errors=True)
+            # Release the claim so a retry (or an operator) is not stuck
+            # behind our empty directory.
+            try:
+                vdir.rmdir()
+            except OSError:
+                pass
             raise
+
+        self._journal_append(
+            suite_name=suite.name,
+            version_id=version_id,
+            digest=digest,
+            manifest_digest=_sha256_hex(manifest_bytes),
+            meta_digest=_sha256_hex(_canonical_json(meta.to_dict())),
+            baseline_digest=_sha256_hex(_canonical_json(baseline.to_dict())),
+        )
 
         return BenchmarkVersion(
             suite_name=suite.name,
@@ -443,13 +526,153 @@ class SnapshotStore:
             promotions=tuple(promotions or []),
         )
 
-    # -- load ------------------------------------------------------------
-    def load(self, suite_name: str, version_id: str) -> tuple[BenchmarkVersion, EvalSuite]:
-        """Load a version, hash-verifying immutability.
+    # -- publish journal -------------------------------------------------
+    # The journal is a hash-chained append-only log of every publish. It
+    # binds the manifest's semantic content (version metadata, baseline)
+    # to the suite digest: editing the manifest's release-gate inputs
+    # without touching suite.json is detected at load time. It is
+    # tamper-*evidence* against partial mutation, not a defense against a
+    # party that rewrites the whole store directory (documented above).
+    @property
+    def _journal_path(self) -> Path:
+        return self.root / "journal.jsonl"
 
-        Raises :class:`VersionNotFoundError` if the version was never
-        published; :class:`SnapshotCorrupted` on any tampering, schema
-        violation, or canonical fixed-point break.
+    def _journal_entries(self) -> list[dict[str, Any]]:
+        path = self._journal_path
+        if not path.exists():
+            return []
+        entries: list[dict[str, Any]] = []
+        for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                entry = json.loads(line)
+            except json.JSONDecodeError as e:
+                raise SnapshotCorrupted(
+                    f"journal.jsonl line {lineno} is not valid JSON: {e}"
+                ) from e
+            if not isinstance(entry, dict):
+                raise SnapshotCorrupted(f"journal.jsonl line {lineno} is not a mapping")
+            entries.append(entry)
+        return entries
+
+    def _journal_append(
+        self,
+        *,
+        suite_name: str,
+        version_id: str,
+        digest: str,
+        manifest_digest: str,
+        meta_digest: str,
+        baseline_digest: str,
+    ) -> None:
+        entries = self._journal_entries()
+        prev_chain = entries[-1]["chain"] if entries else JOURNAL_GENESIS
+        entry: dict[str, Any] = {
+            "tool": "agenteval-bench",
+            "kind": "snapshot-publish",
+            "format": SNAPSHOT_FORMAT,
+            "suite_name": suite_name,
+            "version_id": version_id,
+            "digest": digest,
+            "manifest_digest": "sha256:" + manifest_digest,
+            "meta_digest": "sha256:" + meta_digest,
+            "baseline_digest": "sha256:" + baseline_digest,
+            "prev_chain": prev_chain,
+        }
+        entry["chain"] = _sha256_hex(_canonical_json({k: v for k, v in entry.items()}))
+        with open(self._journal_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, sort_keys=True) + "\n")
+
+    def _journal_lookup(self, suite_name: str, version_id: str) -> dict[str, Any]:
+        matches = [
+            e
+            for e in self._journal_entries()
+            if e.get("suite_name") == suite_name and e.get("version_id") == version_id
+        ]
+        if not matches:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: no publish journal entry — "
+                "the version directory exists but was never journaled "
+                "(crash between publish and journal append? run "
+                "SnapshotStore.repair_journal() after verifying the version out of band)"
+            )
+        if len(matches) > 1:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: {len(matches)} journal entries — "
+                "journal forked, manual inspection required"
+            )
+        return matches[0]
+
+    def _journal_verify_chain(self) -> list[str]:
+        """Verify the journal's hash chain; returns problem descriptions."""
+        problems: list[str] = []
+        prev = JOURNAL_GENESIS
+        for lineno, entry in enumerate(self._journal_entries(), 1):
+            if entry.get("prev_chain") != prev:
+                problems.append(
+                    f"journal.jsonl line {lineno}: chain break "
+                    f"(prev_chain != expected)"
+                )
+                # Re-anchor so one break doesn't cascade into noise.
+                prev = entry.get("chain", prev)
+                continue
+            recomputed = _sha256_hex(
+                _canonical_json({k: v for k, v in entry.items() if k != "chain"})
+            )
+            if entry.get("chain") != recomputed:
+                problems.append(f"journal.jsonl line {lineno}: chain hash mismatch")
+            prev = entry.get("chain", prev)
+        return problems
+
+    def repair_journal(self) -> list[str]:
+        """Re-append missing journal entries after full re-verification.
+
+        Operator action for crash recovery (publish succeeded but the
+        process died before the journal append). Each repaired version is
+        fully re-verified (suite bytes vs manifest digest + canonical
+        fixed point) before its entry is appended. Returns the repaired
+        version ids.
+        """
+        repaired: list[str] = []
+        if not self.root.is_dir():
+            return repaired
+        known = {
+            (e.get("suite_name"), e.get("version_id")) for e in self._journal_entries()
+        }
+        for sdir in sorted(self.root.iterdir()):
+            if not sdir.is_dir() or sdir.name.startswith("."):
+                continue
+            for vdir in sorted(sdir.iterdir()):
+                if not vdir.is_dir() or vdir.name.startswith("."):
+                    continue
+                if (sdir.name, vdir.name) in known:
+                    continue
+                # Full verification first: never journal a corrupt version.
+                version, _suite, manifest_bytes = self._load_unjournaled(
+                    sdir.name, vdir.name
+                )
+                self._journal_append(
+                    suite_name=version.suite_name,
+                    version_id=version.version_id,
+                    digest=version.digest,
+                    manifest_digest=_sha256_hex(manifest_bytes),
+                    meta_digest=_sha256_hex(_canonical_json(version.meta.to_dict())),
+                    baseline_digest=_sha256_hex(
+                        _canonical_json(version.baseline.to_dict())
+                    ),
+                )
+                repaired.append(f"{sdir.name}/{vdir.name}")
+        return repaired
+
+    def _load_unjournaled(
+        self, suite_name: str, version_id: str
+    ) -> tuple[BenchmarkVersion, EvalSuite, bytes]:
+        """load() without the journal cross-check (for repair only).
+
+        Returns the version, the suite, and the raw manifest bytes (whose
+        hash the journal binds).
         """
         self._check_version_id(version_id)
         vdir = self._version_dir(suite_name, version_id)
@@ -462,7 +685,8 @@ class SnapshotStore:
         except OSError as e:
             raise SnapshotCorrupted(f"{vdir}/suite.json unreadable: {e}") from e
         try:
-            manifest = json.loads((vdir / "manifest.json").read_bytes().decode("utf-8"))
+            manifest_bytes = (vdir / "manifest.json").read_bytes()
+            manifest = json.loads(manifest_bytes.decode("utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as e:
             raise SnapshotCorrupted(f"{vdir}/manifest.json unreadable: {e}") from e
 
@@ -480,9 +704,7 @@ class SnapshotStore:
                 f"canonical fixed-point broken for {suite_name}/{version_id}"
             )
         if suite.name != suite_name or manifest.get("version_id") != version_id:
-            raise SnapshotCorrupted(
-                f"manifest identity drift for {suite_name}/{version_id}"
-            )
+            raise SnapshotCorrupted(f"manifest identity drift for {suite_name}/{version_id}")
         promotions_raw = manifest.get("promotions", [])
         if not isinstance(promotions_raw, list):
             raise SnapshotCorrupted(f"{vdir}/manifest.json: promotions must be a list")
@@ -496,6 +718,48 @@ class SnapshotStore:
             baseline=BaselineRecord.from_dict(manifest.get("baseline", {})),
             promotions=tuple(promotions_raw),
         )
+        return version, suite, manifest_bytes
+
+    # -- load ------------------------------------------------------------
+    def load(self, suite_name: str, version_id: str) -> tuple[BenchmarkVersion, EvalSuite]:
+        """Load a version, hash-verifying immutability.
+
+        Verifies the suite bytes against the manifest digest, the canonical
+        fixed point, and the manifest's semantic content (version metadata,
+        baseline) against the hash-chained publish journal. Raises
+        :class:`VersionNotFoundError` if the version was never published;
+        :class:`SnapshotCorrupted` on any tampering, schema violation, or
+        journal mismatch.
+        """
+        version, suite, manifest_bytes = self._load_unjournaled(suite_name, version_id)
+        entry = self._journal_lookup(suite_name, version_id)
+        manifest_digest = "sha256:" + _sha256_hex(manifest_bytes)
+        if entry.get("manifest_digest") != manifest_digest:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: journal manifest digest mismatch — "
+                "manifest.json was edited after publishing "
+                "(chain, timestamps, promotions, or metadata)"
+            )
+        if entry.get("digest") != version.digest:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: journal digest != manifest digest — "
+                "the version was replaced after publishing"
+            )
+        meta_digest = "sha256:" + _sha256_hex(_canonical_json(version.meta.to_dict()))
+        if entry.get("meta_digest") != meta_digest:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: journal meta digest mismatch — "
+                "the version record (owner/why/changes) was edited after publishing"
+            )
+        baseline_digest = "sha256:" + _sha256_hex(
+            _canonical_json(version.baseline.to_dict())
+        )
+        if entry.get("baseline_digest") != baseline_digest:
+            raise SnapshotCorrupted(
+                f"{suite_name}/{version_id}: journal baseline digest mismatch — "
+                "the pinned baseline was edited after publishing; "
+                "the release gate refuses to run on a weakened baseline"
+            )
         return version, suite
 
     # -- listing / verification -------------------------------------------
@@ -511,13 +775,17 @@ class SnapshotStore:
         self.load(suite_name, version_id)
 
     def verify_all(self) -> list[str]:
-        """Hash-verify every published version; returns problem descriptions.
+        """Hash-verify every published version + the journal chain.
 
         Empty list means the whole store is healthy.
         """
         problems: list[str] = []
         if not self.root.is_dir():
             return problems
+        try:
+            problems.extend(self._journal_verify_chain())
+        except SnapshotError as e:
+            problems.append(f"journal.jsonl: {e}")
         for sdir in sorted(self.root.iterdir()):
             if not sdir.is_dir() or sdir.name.startswith("."):
                 continue

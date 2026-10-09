@@ -20,13 +20,25 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
-from agenteval_bench.engine import DEFAULT_SEED, AgentFn, EvalRunner
-from agenteval_bench.models import EvalCase, ExpectedOutput, RubricCriterion
-from agenteval_bench.snapshots import SnapshotStore
+from agenteval_bench.engine import AgentFn, EvalRunner
+from agenteval_bench.models import EvalCase, EvalSuite, ExpectedOutput, RubricCriterion
+from agenteval_bench.snapshots import (
+    BaselineRecord,
+    BenchmarkVersion,
+    SnapshotStore,
+    VersionMeta,
+)
 
 FailureKind = Literal["retry_trace", "correction_pattern", "failed_tool_call", "escalation"]
+
+_FAILURE_KINDS: tuple[str, ...] = (
+    "retry_trace",
+    "correction_pattern",
+    "failed_tool_call",
+    "escalation",
+)
 
 GateVerdict = Literal["GATE_PASS", "GATE_FAIL"]
 
@@ -45,6 +57,10 @@ class ProductionFailure:
     def __post_init__(self) -> None:
         if not self.failure_id:
             raise ValueError("failure_id must be non-empty")
+        if self.kind not in _FAILURE_KINDS:
+            raise ValueError(
+                f"kind must be one of {_FAILURE_KINDS}, got {self.kind!r}"
+            )
         if not self.trace_summary:
             raise ValueError("trace_summary must be non-empty")
         if not self.reference_answer:
@@ -58,7 +74,7 @@ class PromotionRecord:
     """Audit record of one promoted failure, stored in the new version's manifest."""
 
     failure_id: str
-    kind: str
+    kind: FailureKind
     promoted_case_id: str
     prior_score: float
     evaluator_notes: str
@@ -78,11 +94,22 @@ class PromotionRecord:
     def from_dict(cls, d: dict[str, Any]) -> PromotionRecord:
         if not isinstance(d, dict):
             raise TypeError(f"promotion record must be a mapping, got {type(d).__name__}")
+
+        def req(key: str) -> Any:
+            if key not in d:
+                raise ValueError(f"promotion record missing {key!r}")
+            return d[key]
+
+        kind = str(req("kind"))
+        if kind not in _FAILURE_KINDS:
+            raise ValueError(
+                f"promotion record kind must be one of {_FAILURE_KINDS}, got {kind!r}"
+            )
         return cls(
-            failure_id=str(d["failure_id"]),
-            kind=str(d["kind"]),
-            promoted_case_id=str(d["promoted_case_id"]),
-            prior_score=float(d["prior_score"]),
+            failure_id=str(req("failure_id")),
+            kind=cast(FailureKind, kind),
+            promoted_case_id=str(req("promoted_case_id")),
+            prior_score=float(req("prior_score")),
             evaluator_notes=str(d.get("evaluator_notes", "")),
             promoted_at=str(d.get("promoted_at", "")),
         )
@@ -151,20 +178,24 @@ def compare_against_frozen(
     version_id: str,
     agent_fn: AgentFn,
     *,
-    seed: int = DEFAULT_SEED,
+    seed: int | None = None,
     min_pass_rate: float | None = None,
     candidate_agent: str = "candidate",
 ) -> ComparisonReport:
     """Replay ``agent_fn`` against a frozen snapshot and gate on the comparison.
 
     The frozen version is hash-verified on load — a mutated snapshot fails
-    closed before any scoring happens. The gate fails if the candidate's
-    aggregate pass-rate falls below ``min_pass_rate`` (default: the pinned
-    baseline pass-rate — no aggregate regression tolerated) or if any
-    individual case scores below its baseline (no per-case regression).
+    closed before any scoring happens. ``seed`` defaults to the version's
+    pinned baseline seed so the replay runs under the exact RNG stream the
+    baseline was pinned with (apples-to-apples); pass an explicit seed to
+    override. The gate fails if the candidate's aggregate pass-rate falls
+    below ``min_pass_rate`` (default: the pinned baseline pass-rate — no
+    aggregate regression tolerated) or if any individual case scores below
+    its baseline (no per-case regression).
     """
     version, suite = store.load(suite_name, version_id)
-    result = EvalRunner().run(suite, agent_fn, seed=seed)
+    effective_seed = version.baseline.seed if seed is None else seed
+    result = EvalRunner().run(suite, agent_fn, seed=effective_seed)
 
     baseline = version.baseline
     threshold = baseline.pass_rate if min_pass_rate is None else min_pass_rate
@@ -196,7 +227,7 @@ def compare_against_frozen(
         version_id=version_id,
         digest=version.digest,
         candidate_agent=candidate_agent,
-        seed=seed,
+        seed=effective_seed,
         baseline_pass_rate=baseline.pass_rate,
         candidate_pass_rate=result.pass_rate,
         case_deltas=tuple(deltas),
@@ -204,6 +235,47 @@ def compare_against_frozen(
         verdict=verdict,
         reasons=tuple(reasons),
     )
+
+
+def promote_failures_to_version(
+    store: SnapshotStore,
+    suite: EvalSuite,
+    version_id: str,
+    meta: VersionMeta,
+    failures: list[ProductionFailure],
+    baseline: BaselineRecord,
+    *,
+    prev_version_id: str | None = None,
+    promoted_at: str | None = None,
+) -> tuple[BenchmarkVersion, EvalSuite]:
+    """Promote production failures into a NEW snapshot version.
+
+    The flagship BetterBench maintenance step as one call: each failure
+    becomes a replayable case appended to a copy of ``suite`` (the caller's
+    suite is not mutated), the new version is published with the promotion
+    records in its manifest, and the previous version stays frozen.
+    """
+    new_cases: list[EvalCase] = []
+    records: list[dict[str, Any]] = []
+    for failure in failures:
+        case, record = promote_failure(failure, promoted_at=promoted_at)
+        new_cases.append(case)
+        records.append(record.to_dict())
+    new_suite = EvalSuite(
+        name=suite.name,
+        version=suite.version,
+        cases=[*suite.cases, *new_cases],
+        cost_bound=suite.cost_bound,
+    )
+    version = store.publish(
+        new_suite,
+        version_id,
+        meta,
+        baseline,
+        prev_version_id=prev_version_id,
+        promotions=records,
+    )
+    return version, new_suite
 
 
 __all__ = [
@@ -215,4 +287,5 @@ __all__ = [
     "PromotionRecord",
     "compare_against_frozen",
     "promote_failure",
+    "promote_failures_to_version",
 ]

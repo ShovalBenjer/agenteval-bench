@@ -18,6 +18,7 @@ from agenteval_bench.regression import (
     PromotionRecord,
     compare_against_frozen,
     promote_failure,
+    promote_failures_to_version,
 )
 from agenteval_bench.replay import suite_digest
 from agenteval_bench.snapshots import (
@@ -330,3 +331,424 @@ def test_regression_gate_respects_explicit_threshold(tmp_path):
         min_pass_rate=0.9)
     assert report.verdict == "GATE_FAIL"
     assert any("threshold" in r for r in report.reasons)
+
+
+# ------------------------------------------------- CLI: snapshot compare/show
+
+_CLI_SUITE = """
+name: cli-smoke
+cases:
+  - id: a
+    input: "ping"
+    output: "pong ok"
+    expected:
+      contains: ["pong"]
+  - id: b
+    input: "ding"
+    output: "dong"
+    expected:
+      exact: "dong"
+"""
+
+
+def _cli_run(argv, monkeypatch, capsys):
+    from agenteval_bench import cli
+
+    monkeypatch.setattr("sys.argv", ["agenteval-bench", *argv])
+    try:
+        cli.main()
+        captured = capsys.readouterr()
+        return 0, captured.out, captured.err
+    except SystemExit as e:
+        captured = capsys.readouterr()
+        return e.code or 0, captured.out, captured.err
+
+
+def _cli_publish(monkeypatch, capsys, tmp_path, promotions=None):
+    import json
+
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(_CLI_SUITE)
+    store = str(tmp_path / "store")
+    argv = ["snapshot", "publish", "--suite", str(suite_path), "--store", store,
+            "--version", "v1", "--owner", "eval-team", "--why", "smoke baseline",
+            "--changed", "initial freeze", "--cadence", "weekly"]
+    if promotions is not None:
+        prom_path = tmp_path / "promotions.json"
+        prom_path.write_text(json.dumps(promotions))
+        argv += ["--promotions", str(prom_path)]
+    code, _out, err = _cli_run(argv, monkeypatch, capsys)
+    assert code == 0, err
+    return store
+
+
+def test_cli_compare_pass_and_fail(monkeypatch, capsys, tmp_path):
+    import json
+
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"a": "pong ok", "b": "dong"}))
+    code, out, _ = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(good),
+         "--candidate-name", "cand-v2"], monkeypatch, capsys)
+    assert code == 0, out
+    assert "GATE_PASS" in out
+    assert "cand-v2" in out
+
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps({"a": "pong ok", "b": "WRONG"}))
+    code, out, _ = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(bad)], monkeypatch, capsys)
+    assert code == 2, out  # CI convention: 2 = gate failed
+    assert "GATE_FAIL" in out
+    assert "b" in out  # regressed case named
+
+
+def test_cli_compare_missing_candidate_output_scores_zero(monkeypatch, capsys, tmp_path):
+    import json
+
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    partial = tmp_path / "partial.json"
+    partial.write_text(json.dumps({"a": "pong ok"}))
+    code, out, _ = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(partial)], monkeypatch, capsys)
+    assert code == 2, out
+    assert "no candidate output" in out
+
+
+def test_cli_compare_fails_closed_on_tampered_snapshot(monkeypatch, capsys, tmp_path):
+    import json
+
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    target = tmp_path / "store" / "cli-smoke" / "v1" / "suite.json"
+    target.write_bytes(target.read_bytes().replace(b"pong", b"ping", 1))
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"a": "pong ok", "b": "dong"}))
+    code, _out, err = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(good)], monkeypatch, capsys)
+    assert code == 1
+    assert "CORRUPTED" in err
+
+
+def test_cli_show_prints_version_record(monkeypatch, capsys, tmp_path):
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    code, out, _ = _cli_run(
+        ["snapshot", "show", "--store", store, "--suite", "cli-smoke", "--version", "v1"],
+        monkeypatch, capsys)
+    assert code == 0
+    assert "owner: eval-team" in out
+    assert "why: smoke baseline" in out
+    assert "changed from None: initial freeze" in out
+    assert "update cadence: weekly" in out
+    assert "digest=sha256:" in out
+    assert "baseline: pass_rate 100.0%" in out
+
+
+def test_cli_publish_with_promotions_roundtrip(monkeypatch, capsys, tmp_path):
+    failure = ProductionFailure(
+        failure_id="esc-7", kind="failed_tool_call",
+        trace_summary="tool timed out", reference_answer="retry with backoff",
+        prior_score=0.0, evaluator_notes="timeout not retried")
+    _, record = promote_failure(failure)
+    store = _cli_publish(monkeypatch, capsys, tmp_path, promotions=[record.to_dict()])
+    version, _ = SnapshotStore(store).load("cli-smoke", "v1")
+    assert len(version.promotions) == 1
+    assert version.promotions[0]["failure_id"] == "esc-7"
+    code, out, _ = _cli_run(
+        ["snapshot", "show", "--store", store, "--suite", "cli-smoke", "--version", "v1"],
+        monkeypatch, capsys)
+    assert code == 0, out
+    assert "esc-7" in out
+
+
+def test_cli_compare_rejects_bad_candidate_file(monkeypatch, capsys, tmp_path):
+    import json
+
+    store = _cli_publish(monkeypatch, capsys, tmp_path)
+    bad = tmp_path / "bad.json"
+    bad.write_text(json.dumps(["not", "a", "mapping"]))
+    code, _, err = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(bad)], monkeypatch, capsys)
+    assert code == 2
+    assert "mapping" in err
+
+
+# ------------------------------------------------- journal: manifest integrity
+
+def _manifest_path(tmp_path, suite="support", version="v1"):
+    return tmp_path / "store" / suite / version / "manifest.json"
+
+
+def test_journal_chains_publishes(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    _publish(store, _suite(), "v2", prev_version_id="v1")
+    entries = store._journal_entries()
+    assert len(entries) == 2
+    assert entries[0]["prev_chain"] == "GENESIS"
+    assert entries[1]["prev_chain"] == entries[0]["chain"]
+    assert entries[0]["suite_name"] == "support"
+    assert entries[1]["version_id"] == "v2"
+
+
+def test_manifest_baseline_tamper_detected(tmp_path):
+    # The release-gate hole: weaken the pinned baseline without touching
+    # suite.json. The suite-bytes hash still matches; the journal must catch it.
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    target = _manifest_path(tmp_path)
+    manifest = json.loads(target.read_text())
+    manifest["baseline"]["pass_rate"] = 0.0
+    manifest["baseline"]["per_case"] = {c: 0.0 for c in manifest["baseline"]["per_case"]}
+    target.write_text(json.dumps(manifest))
+    # The manifest-level digest fires first (it subsumes the baseline check).
+    with pytest.raises(SnapshotCorrupted, match="manifest"):
+        store.load("support", "v1")
+    problems = store.verify_all()
+    assert any("support/v1" in p for p in problems)
+
+
+def test_manifest_meta_tamper_detected(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    target = _manifest_path(tmp_path)
+    manifest = json.loads(target.read_text())
+    manifest["meta"]["why"] = "rewritten history"
+    target.write_text(json.dumps(manifest))
+    with pytest.raises(SnapshotCorrupted, match="meta"):
+        store.load("support", "v1")
+
+
+def test_journal_chain_break_detected(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    _publish(store, _suite(), "v2", prev_version_id="v1")
+    journal = tmp_path / "store" / "journal.jsonl"
+    lines = journal.read_text().splitlines()
+    entry = json.loads(lines[1])
+    entry["chain"] = "0" * 64  # forge the chain link
+    lines[1] = json.dumps(entry)
+    journal.write_text("\n".join(lines) + "\n")
+    problems = store.verify_all()
+    assert any("journal" in p for p in problems)
+
+
+def test_journal_line_tamper_detected(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    journal = tmp_path / "store" / "journal.jsonl"
+    journal.write_text("not json\n")
+    problems = store.verify_all()
+    assert any("journal" in p for p in problems)
+
+
+def test_repair_journal_after_crash(tmp_path):
+    # Simulate a crash between version rename and journal append.
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    (tmp_path / "store" / "journal.jsonl").unlink()
+    with pytest.raises(SnapshotCorrupted, match="no publish journal entry"):
+        store.load("support", "v1")
+    repaired = store.repair_journal()
+    assert repaired == ["support/v1"]
+    version, _ = store.load("support", "v1")  # works again, fully re-verified
+    assert version.version_id == "v1"
+    assert store.verify_all() == []
+
+
+def test_repair_journal_refuses_corrupt_version(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    (tmp_path / "store" / "journal.jsonl").unlink()
+    target = tmp_path / "store" / "support" / "v1" / "suite.json"
+    target.write_bytes(target.read_bytes() + b" ")
+    with pytest.raises(SnapshotCorrupted):
+        store.repair_journal()  # never journals a corrupt version
+
+
+# ------------------------------------------------- arch fix-forward: B2, A1, A2, A5, A6
+
+def test_compare_uses_pinned_baseline_seed(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    suite = _suite()
+    result = EvalRunner().run(suite, _golden)
+    baseline = baseline_from_run(result, seed=7, agent="golden")
+    store.publish(suite, "v1", _meta(), baseline)
+    report = compare_against_frozen(store, "support", "v1", _golden)
+    assert report.seed == 7  # pinned seed, not the module default
+    report = compare_against_frozen(store, "support", "v1", _golden, seed=99)
+    assert report.seed == 99  # explicit override respected
+
+
+def test_promote_failures_to_version(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    suite = _suite()
+    v1, _ = _publish(store, suite, "v1")
+    failures = [
+        ProductionFailure(failure_id="f1", kind="escalation", trace_summary="t1",
+                          reference_answer="r1", prior_score=0.0),
+        ProductionFailure(failure_id="f2", kind="failed_tool_call", trace_summary="t2",
+                          reference_answer="r2", prior_score=0.25,
+                          evaluator_notes="tool flaked"),
+    ]
+    version2, new_suite = promote_failures_to_version(
+        store, suite, "v2", _meta(why="promote f1,f2"), failures, _baseline(),
+        prev_version_id="v1")
+    assert version2.version_id == "v2"
+    assert version2.prev_version_id == "v1"
+    assert len(new_suite.cases) == len(suite.cases) + 2  # caller's suite untouched
+    assert len(suite.cases) == 2
+    assert len(version2.promotions) == 2
+    assert version2.promotions[1]["failure_id"] == "f2"
+    # v1 frozen: same digest, no new cases.
+    old_version, old_suite = store.load("support", "v1")
+    assert old_version.digest == v1.digest
+    assert len(old_suite.cases) == 2
+
+
+def test_publish_claims_version_id_exclusively(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    # Simulate a concurrent publisher that already claimed the id (empty dir).
+    vdir = tmp_path / "store" / "support" / "v1"
+    vdir.mkdir(parents=True)
+    with pytest.raises(VersionExistsError):
+        _publish(store, _suite(), "v1")
+
+
+def test_promotion_record_kind_validated():
+    with pytest.raises(ValueError, match="kind must be one of"):
+        PromotionRecord.from_dict({
+            "failure_id": "x", "kind": "nope", "promoted_case_id": "c",
+            "prior_score": 0.0, "evaluator_notes": "", "promoted_at": "",
+        })
+
+
+def test_cli_publish_refuses_vacuous_baseline(monkeypatch, capsys, tmp_path):
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text('name: empty\ncases:\n  - id: a\n    input: "q"\n    expected:\n      contains: ["x"]\n')
+    code, _, err = _cli_run(
+        ["snapshot", "publish", "--suite", str(suite_path),
+         "--store", str(tmp_path / "store"), "--version", "v1",
+         "--owner", "t", "--why", "w"], monkeypatch, capsys)
+    assert code == 2
+    assert "no recorded" in err
+
+
+def test_cli_compare_defaults_to_pinned_seed(monkeypatch, capsys, tmp_path):
+    import json
+
+    suite_path = tmp_path / "suite.yaml"
+    suite_path.write_text(_CLI_SUITE)
+    store = str(tmp_path / "store")
+    code, _, err = _cli_run(
+        ["snapshot", "publish", "--suite", str(suite_path), "--store", store,
+         "--version", "v1", "--owner", "t", "--why", "w", "--seed", "7"],
+        monkeypatch, capsys)
+    assert code == 0, err
+    good = tmp_path / "good.json"
+    good.write_text(json.dumps({"a": "pong ok", "b": "dong"}))
+    code, out, _ = _cli_run(
+        ["snapshot", "compare", "--store", store, "--suite", "cli-smoke",
+         "--version", "v1", "--candidate-outputs", str(good)], monkeypatch, capsys)
+    assert code == 0, out
+    assert "seed=7" in out
+
+
+# ------------------------------------------------- impl fix-forward: B1, B2, A2, A10
+
+def test_publish_rejects_duplicate_case_ids(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    suite = _suite()
+    suite.cases.append(EvalCase(id="greet", input="dup", expected=ExpectedOutput()))
+    with pytest.raises(SnapshotError, match="pre-publish validation"):
+        store.publish(suite, "v1", _meta(), _baseline())
+    # The version id is NOT bricked: nothing was written, republish works.
+    assert store.list_versions("support") == []
+    version, _ = _publish(store, _suite(), "v1")
+    assert version.version_id == "v1"
+
+
+def test_publish_rejects_noncanonical_types(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    suite = _suite()
+    suite.cases[0].rubric[0].weight = 1  # type: ignore[assignment]  # int, not float
+    with pytest.raises(SnapshotError, match="canonical-stable"):
+        store.publish(suite, "v1", _meta(), _baseline())
+    assert store.list_versions("support") == []
+
+
+def test_publish_rejects_suite_name_traversal(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    suite = _suite(name="../escaped")
+    with pytest.raises(SnapshotError, match="safe path segment"):
+        store.publish(suite, "v1", _meta(), _baseline())
+    assert not (tmp_path / "escaped").exists()
+
+
+def test_dot_version_id_rejected(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    with pytest.raises(SnapshotError):
+        _publish(store, _suite(), ".v1")
+
+
+def test_regression_gate_per_case_arm_isolated(tmp_path):
+    # Aggregate held equal (0.5 -> 0.5) while one case regresses and another
+    # improves: the per-case arm alone must fail the gate.
+    store = SnapshotStore(tmp_path / "store")
+    suite = EvalSuite(
+        name="s",
+        cases=[
+            EvalCase(id="a", input="ia", expected=ExpectedOutput(exact="x"), output="x"),
+            EvalCase(id="b", input="ib", expected=ExpectedOutput(exact="y"), output="y"),
+        ],
+    )
+    base_result = EvalRunner().run(
+        suite, lambda i: "x" if i == "ia" else "WRONG")  # a passes, b fails -> 0.5
+    store.publish(suite, "v1", _meta(),
+                  baseline_from_run(base_result, seed=42, agent="base"))
+    report = compare_against_frozen(
+        store, "s", "v1", lambda i: "WRONG" if i == "ia" else "y")  # a regresses, b fixed
+    assert report.candidate_pass_rate == report.baseline_pass_rate == 0.5
+    assert report.verdict == "GATE_FAIL"
+    assert report.regressed_cases == ("a",)
+
+
+def test_manifest_chain_fields_tamper_detected(tmp_path):
+    store = SnapshotStore(tmp_path / "store")
+    _publish(store, _suite(), "v1")
+    _publish(store, _suite(), "v2", prev_version_id="v1")
+    target = _manifest_path(tmp_path, version="v2")
+    manifest = json.loads(target.read_text())
+    manifest["prev_version_id"] = "v0"  # forge the chain link
+    target.write_text(json.dumps(manifest))
+    with pytest.raises(SnapshotCorrupted, match="manifest"):
+        store.load("support", "v2")
+    manifest = json.loads(target.read_text())
+    manifest["prev_version_id"] = "v1"
+    manifest["promotions"] = [{"forged": True}]
+    target.write_text(json.dumps(manifest))
+    with pytest.raises(SnapshotCorrupted, match="manifest"):
+        store.load("support", "v2")
+
+
+def test_version_meta_rejects_empty_owner_why():
+    with pytest.raises(ValueError):
+        VersionMeta(owner="", why="x")
+    with pytest.raises(ValueError):
+        VersionMeta(owner="x", why="")
+
+
+def test_production_failure_kind_validated():
+    with pytest.raises(ValueError, match="kind must be one of"):
+        ProductionFailure(failure_id="x", kind="nope", trace_summary="t",  # type: ignore[arg-type]
+                          reference_answer="r", prior_score=0.0)
+
+
+def test_promotion_record_missing_key():
+    with pytest.raises(ValueError, match="missing"):
+        PromotionRecord.from_dict({"failure_id": "x"})
