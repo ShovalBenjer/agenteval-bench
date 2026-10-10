@@ -562,6 +562,361 @@ def cmd_bugsmith(args: list[str]) -> int:
         return 1
 
 
+def cmd_snapshot(args: list[str]) -> int:
+    """Immutable benchmark snapshots: publish / verify / list / check.
+
+    publish: freeze a YAML suite as a new immutable version. The baseline is
+    a real recorded run (recorded `output` fields, like `run`), pinned into
+    the version manifest for the release gate.
+    """
+    from agenteval_bench.snapshots import SnapshotError, SnapshotStore
+
+    if not args or args[0] in ("--help", "-h"):
+        print("Usage: agenteval-bench snapshot publish --suite <file> --store <dir>")
+        print("                                --version <id> --owner <name> --why <text>")
+        print("                                [--prev <id>] [--changed <text>] [--cadence <text>]")
+        print("                                [--regression-set <text>] [--feedback-loop <text>]")
+        print("                                [--promotions <file.json>] [--agent <name>] [--seed 42]")
+        print("         (baseline is pinned from the suite's recorded `output` fields, like `run`)")
+        print("       agenteval-bench snapshot show --store <dir> --suite <name> --version <id>")
+        print("       agenteval-bench snapshot verify --store <dir> --suite <name> --version <id>")
+        print("       agenteval-bench snapshot list --store <dir> [--suite <name>]")
+        print("       agenteval-bench snapshot check --store <dir>")
+        print("       agenteval-bench snapshot repair --store <dir> --reason <text>")
+        print("         (re-journal crash-orphaned versions after out-of-band verification)")
+        print("       agenteval-bench snapshot compare --store <dir> --suite <name> --version <id>")
+        print("                                --candidate-outputs <file.json>")
+        print("                                [--candidate-name <name>] [--min-pass-rate <x>]")
+        print("                                [--seed 42]")
+        print("         (default seed = the version's pinned baseline seed;")
+        print("          exit 0 = GATE_PASS, exit 2 = GATE_FAIL: releases gate on this comparison)")
+        return 0
+
+    sub, rest = args[0], args[1:]
+    if sub == "publish":
+        return _snapshot_publish(rest)
+    if sub == "show":
+        rest, store_s = _flag(rest, "--store")
+        rest, suite_name = _flag(rest, "--suite")
+        rest, version_id = _flag(rest, "--version")
+        if not store_s or not suite_name or not version_id:
+            print("Error: show needs --store <dir> --suite <name> --version <id>",
+                  file=sys.stderr)
+            return 2
+        try:
+            version, suite = SnapshotStore(store_s).load(suite_name, version_id)
+        except SnapshotError as e:
+            print(f"CORRUPTED: {e}", file=sys.stderr)
+            return 1
+        meta = version.meta
+        base = version.baseline
+        print(f"{version.suite_name}/{version.version_id}  digest={version.digest}")
+        print(f"created: {version.created_at}  prev: {version.prev_version_id}")
+        print(f"owner: {meta.owner}")
+        print(f"why: {meta.why}")
+        if meta.changed_from_prev and version.prev_version_id:
+            print(f"changed from {version.prev_version_id}: {meta.changed_from_prev}")
+        elif not version.prev_version_id:
+            print("initial version (no predecessor)")
+        if meta.cadence:
+            print(f"update cadence: {meta.cadence}")
+        if meta.regression_set:
+            print(f"regression set: {meta.regression_set}")
+        if meta.feedback_loop:
+            print(f"feedback loop: {meta.feedback_loop}")
+        print(f"cases: {len(suite.cases)}  "
+              f"baseline: pass_rate {base.pass_rate:.1%} (agent={base.agent}, seed={base.seed})")
+        if version.promotions:
+            print(f"promotions ({len(version.promotions)}):")
+            for p in version.promotions:
+                print(f"  - {p.get('promoted_case_id')} "
+                      f"<- {p.get('kind')}:{p.get('failure_id')} "
+                      f"(prior_score={p.get('prior_score')})")
+        return 0
+    if sub == "compare":
+        return _snapshot_compare(rest)
+    if sub == "verify":
+        rest, store_s = _flag(rest, "--store")
+        rest, suite_name = _flag(rest, "--suite")
+        rest, version_id = _flag(rest, "--version")
+        if not store_s or not suite_name or not version_id:
+            print("Error: verify needs --store <dir> --suite <name> --version <id>",
+                  file=sys.stderr)
+            return 2
+        try:
+            SnapshotStore(store_s).verify(suite_name, version_id)
+        except SnapshotError as e:
+            print(f"CORRUPTED: {e}", file=sys.stderr)
+            return 1
+        print(f"OK: {suite_name}/{version_id} hash-verified")
+        return 0
+    if sub == "list":
+        rest, store_s = _flag(rest, "--store")
+        rest, suite_name = _flag(rest, "--suite")
+        if not store_s:
+            print("Error: list needs --store <dir>", file=sys.stderr)
+            return 2
+        store = SnapshotStore(store_s)
+        if suite_name:
+            for v in store.list_versions(suite_name):
+                print(f"{suite_name}/{v}")
+        else:
+            root = store.root
+            if root.is_dir():
+                for sdir in sorted(p for p in root.iterdir()
+                                   if p.is_dir() and not p.name.startswith(".")):
+                    for v in store.list_versions(sdir.name):
+                        print(f"{sdir.name}/{v}")
+        return 0
+    if sub == "check":
+        rest, store_s = _flag(rest, "--store")
+        if not store_s:
+            print("Error: check needs --store <dir>", file=sys.stderr)
+            return 2
+        problems = SnapshotStore(store_s).verify_all()
+        if problems:
+            print(f"CORRUPTED: {len(problems)} version(s) failed verification:")
+            for p in problems:
+                print(f"  - {p}")
+            return 1
+        print("OK: all published versions hash-verified")
+        return 0
+    if sub == "repair":
+        rest, store_s = _flag(rest, "--store")
+        rest, reason = _flag(rest, "--reason")
+        if not store_s or not reason:
+            print("Error: repair needs --store <dir> --reason <text>", file=sys.stderr)
+            return 2
+        try:
+            repaired = SnapshotStore(store_s).repair_journal(reason)
+        except SnapshotError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
+        if repaired:
+            print(f"Repaired {len(repaired)} version(s) (journaled as snapshot-repair):")
+            for v in repaired:
+                print(f"  - {v}")
+        else:
+            print("Nothing to repair: every published version is journaled.")
+        return 0
+    print(f"Error: unknown snapshot subcommand: {sub}", file=sys.stderr)
+    return 2
+
+
+def _snapshot_publish(args: list[str]) -> int:
+    from agenteval_bench.regression import PromotionRecord
+    from agenteval_bench.snapshots import (
+        SnapshotError,
+        SnapshotStore,
+        VersionMeta,
+        baseline_from_run,
+    )
+
+    args, suite_path = _flag(args, "--suite")
+    args, store_s = _flag(args, "--store")
+    args, version_id = _flag(args, "--version")
+    args, owner = _flag(args, "--owner")
+    args, why = _flag(args, "--why")
+    args, prev = _flag(args, "--prev")
+    args, changed = _flag(args, "--changed", "")
+    args, cadence = _flag(args, "--cadence", "")
+    args, regset = _flag(args, "--regression-set", "")
+    args, feedback = _flag(args, "--feedback-loop", "")
+    args, agent = _flag(args, "--agent", "recorded")
+    args, seed_s = _flag(args, "--seed", str(DEFAULT_SEED))
+    args, promotions_path = _flag(args, "--promotions")
+
+    missing = [n for n, v in (("--suite", suite_path), ("--store", store_s),
+                              ("--version", version_id), ("--owner", owner),
+                              ("--why", why)) if not v]
+    if missing:
+        print(f"Error: snapshot publish needs {' '.join(missing)}", file=sys.stderr)
+        return 2
+    try:
+        seed = int(seed_s or str(DEFAULT_SEED))
+    except ValueError:
+        print(f"Error: --seed must be an integer, got {seed_s}", file=sys.stderr)
+        return 2
+
+    try:
+        promotions: list[dict] = []
+        if promotions_path:
+            try:
+                with open(promotions_path, encoding="utf-8") as f:
+                    raw_promotions = json.load(f)
+            except (OSError, json.JSONDecodeError) as e:
+                print(f"Error: cannot read --promotions file: {e}", file=sys.stderr)
+                return 2
+            if not isinstance(raw_promotions, list):
+                print("Error: --promotions file must be a JSON list of promotion records",
+                      file=sys.stderr)
+                return 2
+            try:
+                promotions = [PromotionRecord.from_dict(p).to_dict()
+                              for p in raw_promotions]
+            except (ValueError, TypeError, KeyError) as e:
+                print(f"Error: invalid promotion record: {e}", file=sys.stderr)
+                return 2
+        suite, recorded, missing, _digest = _load_suite_for_replay(suite_path)
+        result, _outputs = _run_suite(suite, recorded, seed)
+        if missing:
+            print(f"Note: {len(missing)} case(s) had no recorded output and were skipped.")
+        scored = result.passed + result.failed
+        if scored == 0:
+            print("Error: no cases scored — the suite has no recorded `output` fields, "
+                  "so no baseline can be pinned. Publish needs a replayable suite "
+                  "(see `run --replay-log`).", file=sys.stderr)
+            return 2
+        baseline = baseline_from_run(result, seed=seed, agent=agent or "recorded")
+        version = SnapshotStore(store_s).publish(
+            suite,
+            version_id,
+            VersionMeta(
+                owner=owner or "",
+                why=why or "",
+                changed_from_prev=changed or "",
+                cadence=cadence or "",
+                regression_set=regset or "",
+                feedback_loop=feedback or "",
+            ),
+            baseline,
+            prev_version_id=prev,
+            promotions=promotions,
+        )
+    except SnapshotError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        print(f"Error: storage failure during publish: {e}", file=sys.stderr)
+        return 1
+    print(f"Published {suite.name}/{version.version_id} digest={version.digest}")
+    print(f"Baseline: pass_rate {version.baseline.pass_rate:.1%} "
+          f"(agent={version.baseline.agent}, seed={seed})")
+    if promotions:
+        print(f"Promotions recorded: {len(promotions)}")
+    return 0
+
+
+def _snapshot_compare(args: list[str]) -> int:
+    """Replay a candidate's recorded outputs against a frozen version and gate.
+
+    Exit 0 = GATE_PASS (release), exit 2 = GATE_FAIL (block), exit 1/2 = usage
+    or corruption errors — same convention as `run --ci`.
+    """
+    from agenteval_bench.regression import compare_against_frozen
+    from agenteval_bench.snapshots import SnapshotError, SnapshotStore
+
+    args, store_s = _flag(args, "--store")
+    args, suite_name = _flag(args, "--suite")
+    args, version_id = _flag(args, "--version")
+    args, cand_path = _flag(args, "--candidate-outputs")
+    args, cand_name = _flag(args, "--candidate-name", "candidate")
+    args, threshold_s = _flag(args, "--min-pass-rate")
+    args, seed_s = _flag(args, "--seed")  # None -> version's pinned baseline seed
+
+    missing = [n for n, v in (("--store", store_s), ("--suite", suite_name),
+                              ("--version", version_id),
+                              ("--candidate-outputs", cand_path)) if not v]
+    if missing:
+        print(f"Error: snapshot compare needs {' '.join(missing)}", file=sys.stderr)
+        return 2
+    try:
+        with open(cand_path or "", encoding="utf-8") as f:
+            candidate_outputs = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        print(f"Error: cannot read --candidate-outputs file: {e}", file=sys.stderr)
+        return 2
+    if not isinstance(candidate_outputs, dict) or not all(
+        isinstance(k, str) and isinstance(v, str)
+        for k, v in candidate_outputs.items()
+    ):
+        print("Error: --candidate-outputs must be a JSON object mapping "
+              "case_id -> output string", file=sys.stderr)
+        return 2
+    try:
+        threshold = float(threshold_s) if threshold_s is not None else None
+        if threshold is not None and not 0.0 <= threshold <= 1.0:
+            raise ValueError("out of range")
+    except ValueError:
+        print(f"Error: --min-pass-rate must be between 0.0 and 1.0, got {threshold_s}",
+              file=sys.stderr)
+        return 2
+    try:
+        seed = int(seed_s) if seed_s is not None else None
+    except ValueError:
+        print(f"Error: --seed must be an integer, got {seed_s}", file=sys.stderr)
+        return 2
+
+    try:
+        _version, suite = SnapshotStore(store_s or "").load(
+            suite_name or "", version_id or "")
+    except SnapshotError as e:
+        print(f"CORRUPTED: {e}", file=sys.stderr)
+        return 1
+
+    replay_ids = iter([c.id for c in suite.cases if not c.skip])
+    ordered_ids = [c.id for c in suite.cases if not c.skip]
+    missing_ids: list[str] = []
+    called_ids: list[str] = []
+
+    def candidate_fn(_input: str) -> str:
+        # The engine calls the agent fn once per non-skipped case, in case
+        # order (EvalRunner.run contract). Attribution is by call order;
+        # any divergence fails LOUDLY below, never silently misattributed.
+        try:
+            cid = next(replay_ids)
+        except StopIteration:
+            raise SnapshotError(
+                "candidate agent_fn called more times than the frozen suite "
+                "has cases — attribution would be silent misattribution"
+            ) from None
+        called_ids.append(cid)
+        if cid not in candidate_outputs:
+            missing_ids.append(cid)
+            return ""
+        return candidate_outputs[cid]
+
+    # compare_against_frozen hash-verifies the frozen set on load and runs
+    # the candidate through the same EvalRunner + seed as the baseline.
+    store = SnapshotStore(store_s or "")
+    try:
+        report = compare_against_frozen(
+            store,
+            suite_name or "",
+            version_id or "",
+            candidate_fn,
+            seed=seed,
+            min_pass_rate=threshold,
+            candidate_agent=cand_name or "candidate",
+        )
+    except SnapshotError as e:
+        print(f"CORRUPTED: {e}", file=sys.stderr)
+        return 1
+
+    if called_ids != ordered_ids:
+        print("Error: candidate output attribution mismatch — the engine's agent_fn "
+              "call order diverged from frozen case order; refusing to score.",
+              file=sys.stderr)
+        return 1
+
+    print(f"Regression gate: {suite_name}/{version_id} "
+          f"(digest={report.digest[:19]}...) vs candidate '{report.candidate_agent}' "
+          f"(seed={report.seed})")
+    print(f"baseline pass_rate {report.baseline_pass_rate:.1%} -> "
+          f"candidate {report.candidate_pass_rate:.1%}")
+    if missing_ids:
+        print(f"Note: {len(missing_ids)} case(s) had no candidate output and scored 0 "
+              f"({', '.join(missing_ids[:5])}{'...' if len(missing_ids) > 5 else ''}).")
+    for d in report.case_deltas:
+        mark = "REGRESSED" if d.case_id in report.regressed_cases else "ok"
+        if d.candidate_score != d.baseline_score:
+            print(f"  {d.case_id}: {d.baseline_score:.2f} -> {d.candidate_score:.2f} [{mark}]")
+    print(f"verdict: {report.verdict}")
+    for reason in report.reasons:
+        print(f"  reason: {reason}")
+    return 0 if report.verdict == "GATE_PASS" else 2
+
+
 def main() -> None:
     """Minimal CLI — full argparse/typer in v0.2."""
     args = sys.argv[1:]
@@ -579,6 +934,9 @@ def main() -> None:
         print("       agenteval-bench bugsmith --repo <dir> --out <dir> [--procedural 8]")
         print("                                [--seed 42] [--local] [--config curation.json]")
         print("                                [--pr-mirror patch:pr-ref]")
+        print("       agenteval-bench snapshot publish --suite <file> --store <dir>")
+        print("                                --version <id> --owner <name> --why <text>")
+        print("       agenteval-bench snapshot verify --store <dir> --suite <name> --version <id>")
         print("       (--seed is recorded for provenance; the test itself is deterministic)")
         return
 
@@ -595,6 +953,8 @@ def main() -> None:
         sys.exit(cmd_simpson(rest))
     elif cmd == "bugsmith":
         sys.exit(cmd_bugsmith(rest))
+    elif cmd == "snapshot":
+        sys.exit(cmd_snapshot(rest))
     else:
         print(f"Unknown command: {cmd}", file=sys.stderr)
         sys.exit(1)
