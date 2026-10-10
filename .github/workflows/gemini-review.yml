@@ -95,7 +95,7 @@ jobs:
 
       - name: Upload findings
         if: ${{ steps.secret.outputs.present == 'true' && hashFiles('gemini-findings.json') != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: gemini-review-findings
           path: gemini-findings.json
